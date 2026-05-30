@@ -156,7 +156,7 @@ public final class NodeStore: ObservableObject {
     private var ratchetEngine: RatchetEngine?
     private var identityEngine: IdentityEngine?
     private let fileTransferEngine = FileTransferEngine()
-    private let callEngine = WebRTCCallEngine()
+    private let callEngine = MCStreamCallEngine()
     private let backgroundRuntime = BackgroundRuntimeManager()
     private var deliveryTask: Task<Void, Never>?
     private var myPeerIDValue: String = ""
@@ -219,8 +219,15 @@ public final class NodeStore: ObservableObject {
                     await self?.handleIncoming(packet: packet, fromPeerID: fromPeerID)
                 }
             }
+            t.onStreamReceived = { [weak self] stream, peerID, name in
+                guard name.hasPrefix("call-audio") else { return }
+                Task { @MainActor [weak self] in
+                    self?.callEngine.handleIncomingAudioStream(stream, from: peerID)
+                }
+            }
 
             transport = t
+            callEngine.weakTransport = t
             t.start()
             startDeliveryLoop()
             requestNotificationPermission()
@@ -494,6 +501,26 @@ public final class NodeStore: ObservableObject {
     public func acceptIncomingCall() {
         guard let incoming = incomingCall else { return }
         incomingCall = nil
+
+        // CRITICAL: send callAccept BEFORE changing AVAudioSession
+        // (activating voiceChat audio session can disrupt BT/MPC transport)
+        let accept = TransportMessage(
+            kind: .callAccept,
+            senderPeerID: myPeerIDValue,
+            senderNickname: nickname,
+            receiverPeerID: incoming.peerID,
+            callID: incoming.id,
+            callMediaType: incoming.media.rawValue
+        )
+        do {
+            if let transport {
+                try transport.send(message: accept, to: PeerID(incoming.peerID))
+            }
+        } catch {
+            errorMessage = "Не удалось принять звонок: \(error.localizedDescription)"
+            return
+        }
+
         activeCall = ActiveCallSession(
             id: incoming.id,
             peerID: incoming.peerID,
@@ -502,10 +529,12 @@ public final class NodeStore: ObservableObject {
             phase: .connecting,
             startedAt: nil
         )
-        backgroundRuntime.activateCallAudio()
+        callEngine.weakTransport = transport
 
         Task { @MainActor in
             do {
+                // Activate audio session before starting engine (required for mic input)
+                backgroundRuntime.activateCallAudio()
                 try await callEngine.startCall(with: PeerID(incoming.peerID), media: incoming.media)
                 activeCall?.phase = .active
                 activeCall?.startedAt = Date()
@@ -515,16 +544,6 @@ public final class NodeStore: ObservableObject {
                 backgroundRuntime.deactivateCallAudio()
             }
         }
-
-        let accept = TransportMessage(
-            kind: .callAccept,
-            senderPeerID: myPeerIDValue,
-            senderNickname: nickname,
-            receiverPeerID: incoming.peerID,
-            callID: incoming.id,
-            callMediaType: incoming.media.rawValue
-        )
-        try? transport?.send(message: accept, to: PeerID(incoming.peerID))
     }
 
     public func declineIncomingCall() {
@@ -891,9 +910,11 @@ public final class NodeStore: ObservableObject {
               activeCall?.peerID == fromPeerID.value else { return }
 
         activeCall?.phase = .connecting
-        backgroundRuntime.activateCallAudio()
+        callEngine.weakTransport = transport
+
         Task { @MainActor in
             do {
+                backgroundRuntime.activateCallAudio()
                 let media = activeCall?.media ?? .voice
                 try await callEngine.startCall(with: PeerID(fromPeerID.value), media: media)
                 activeCall?.phase = .active

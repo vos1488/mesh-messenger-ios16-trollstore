@@ -111,6 +111,8 @@ public final class MCPTransport: NSObject {
     public var onPeerConnected: ((PeerID, String) -> Void)?
     public var onPeerDisconnected: ((PeerID) -> Void)?
     public var onPeerDiscovered: ((TransportDiscoveredPeer) -> Void)?
+    /// Called when a remote peer opens an MCSession stream to us.
+    public var onStreamReceived: ((InputStream, PeerID, String) -> Void)?
 
     private static let serviceType = "meshmsg16"
 
@@ -206,6 +208,15 @@ public final class MCPTransport: NSObject {
         session.connectedPeers.compactMap { peerInfoMap[$0.displayName]?.peerID.value }
     }
 
+    /// Opens an MCSession output stream to the given peer. The remote side receives it via `onStreamReceived`.
+    public func startAudioStream(to peerID: PeerID, name: String) throws -> OutputStream {
+        let targets = session.connectedPeers.filter { mcPeer in
+            peerInfoMap[mcPeer.displayName]?.peerID.value == peerID.value
+        }
+        guard let target = targets.first else { throw TransportError.peerNotConnected }
+        return try session.startStream(withName: name, toPeer: target)
+    }
+
     public func peerKeys(peerID: PeerID) -> (signing: Data?, agreement: Data?) {
         guard let info = peerInfoMap.values.first(where: { $0.peerID.value == peerID.value }) else {
             return (nil, nil)
@@ -237,7 +248,10 @@ extension MCPTransport: MCSessionDelegate {
         onMessageReceived?(msg, meshID)
     }
 
-    public func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
+    public func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {
+        let meshID = peerInfoMap[peerID.displayName]?.peerID ?? PeerID(peerID.displayName)
+        onStreamReceived?(stream, meshID, streamName)
+    }
     public func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {}
     public func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {}
 }

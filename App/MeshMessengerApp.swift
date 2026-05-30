@@ -16,6 +16,13 @@ struct RootView: View {
     @EnvironmentObject var store: NodeStore
     @Environment(\.scenePhase) private var scenePhase
 
+    private var showCallScreen: Bool {
+        if let call = store.activeCall {
+            return call.phase != .ended
+        }
+        return false
+    }
+
     var body: some View {
         Group {
             if store.isRunning {
@@ -43,6 +50,10 @@ struct RootView: View {
                     store.declineIncomingCall()
                 }
             )
+        }
+        .fullScreenCover(isPresented: .constant(showCallScreen)) {
+            ActiveCallView()
+                .environmentObject(store)
         }
     }
 }
