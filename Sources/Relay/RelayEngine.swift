@@ -1,6 +1,6 @@
 import Foundation
 
-public enum RelayDecision: Sendable, Equatable {
+public enum RelayDecision: Sendable {
     case deliverLocal
     case forward(nextHop: PeerID, packet: Packet)
     case drop(reason: String)

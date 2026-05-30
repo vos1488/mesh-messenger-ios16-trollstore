@@ -18,7 +18,7 @@ public protocol CallEngine {
     func endCall() async
 }
 
-public actor WebRTCCallEngine: CallEngine {
+public final class WebRTCCallEngine: CallEngine {
     public private(set) var state: CallState = .idle
 
     public init() {}
