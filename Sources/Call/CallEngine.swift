@@ -32,7 +32,11 @@ public final class MCStreamCallEngine: CallEngine {
 #if canImport(AVFoundation)
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
-    private var captureFormat: AVAudioFormat?
+    private var wireFormat: AVAudioFormat?
+    private var playbackFormat: AVAudioFormat?
+    private var captureConverter: AVAudioConverter?
+    private var playbackConverter: AVAudioConverter?
+    private var receiveAccumulator = Data()
 #endif
     private var outputStream: OutputStream?
     private var inputStream: InputStream?
@@ -99,33 +103,30 @@ public final class MCStreamCallEngine: CallEngine {
         audioEngine = engine
 
         let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
-        captureFormat = format
+        let inputFormat = inputNode.outputFormat(forBus: 0)
+        let outputFormat = engine.mainMixerNode.outputFormat(forBus: 0)
+        guard let callWireFormat = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: true
+        ) else {
+            return
+        }
+        wireFormat = callWireFormat
+        playbackFormat = outputFormat
+        captureConverter = AVAudioConverter(from: inputFormat, to: callWireFormat)
+        playbackConverter = AVAudioConverter(from: callWireFormat, to: outputFormat)
 
         let player = AVAudioPlayerNode()
         playerNode = player
         engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
+        engine.connect(player, to: engine.mainMixerNode, format: outputFormat)
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self, weak outputStream] buf, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self, weak outputStream] buf, _ in
+            guard let self else { return }
             guard let outStream = outputStream, outStream.streamStatus == .open else { return }
-            guard let channelData = buf.floatChannelData?[0] else { return }
-            let byteCount = Int(buf.frameLength) * 4
-            let data = Data(bytes: channelData, count: byteCount)
-            self?.audioQueue.async {
-                data.withUnsafeBytes { rawPtr in
-                    guard let base = rawPtr.baseAddress else { return }
-                    var remaining = data.count
-                    var offset = 0
-                    while remaining > 0 {
-                        guard outStream.hasSpaceAvailable else { break }
-                        let written = outStream.write(base.advanced(by: offset), maxLength: remaining)
-                        guard written > 0 else { break }
-                        offset += written
-                        remaining -= written
-                    }
-                }
-            }
+            self.encodeAndSendCapturedAudio(buf, to: outStream)
         }
 
         do {
@@ -138,7 +139,11 @@ public final class MCStreamCallEngine: CallEngine {
     }
 
     private func startReceiving(stream: InputStream) {
+        inputStream?.close()
         inputStream = stream
+#if canImport(AVFoundation)
+        receiveAccumulator.removeAll(keepingCapacity: true)
+#endif
         stream.schedule(in: .main, forMode: .default)
         stream.open()
 
@@ -153,26 +158,120 @@ public final class MCStreamCallEngine: CallEngine {
         guard let stream = inputStream, stream.hasBytesAvailable,
               let player = playerNode,
               let engine = audioEngine, engine.isRunning,
-              let format = captureFormat else { return }
+              let callWireFormat = wireFormat,
+              let outFormat = playbackFormat,
+              let converter = playbackConverter else { return }
 
         var buf = [UInt8](repeating: 0, count: 8192)
         let count = stream.read(&buf, maxLength: buf.count)
         guard count > 0 else { return }
+        receiveAccumulator.append(contentsOf: buf.prefix(count))
 
-        let frameCount = count / 4  // Float32 = 4 bytes per frame
-        guard frameCount > 0,
-              let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)),
-              let floatPtr = pcm.floatChannelData?[0] else { return }
-
-        pcm.frameLength = AVAudioFrameCount(frameCount)
-        buf.withUnsafeBytes { rawPtr in
-            if let ptr = rawPtr.bindMemory(to: Float.self).baseAddress {
-                floatPtr.update(from: ptr, count: frameCount)
+        while receiveAccumulator.count >= 2 {
+            let payloadSize = (Int(receiveAccumulator[0]) << 8) | Int(receiveAccumulator[1])
+            guard payloadSize > 0 else {
+                receiveAccumulator.removeFirst(min(2, receiveAccumulator.count))
+                continue
             }
+            let totalFrameSize = 2 + payloadSize
+            guard receiveAccumulator.count >= totalFrameSize else { break }
+
+            let payload = Data(receiveAccumulator[2..<totalFrameSize])
+            receiveAccumulator.removeFirst(totalFrameSize)
+            enqueuePlaybackPayload(payload, wireFormat: callWireFormat, outputFormat: outFormat, converter: converter, player: player)
         }
-        player.scheduleBuffer(pcm, completionHandler: nil)
 #endif
     }
+
+#if canImport(AVFoundation)
+    private func encodeAndSendCapturedAudio(_ inputBuffer: AVAudioPCMBuffer, to stream: OutputStream) {
+        guard let converter = captureConverter, let callWireFormat = wireFormat else { return }
+
+        let ratio = callWireFormat.sampleRate / max(1, inputBuffer.format.sampleRate)
+        let outCapacity = AVAudioFrameCount(Double(inputBuffer.frameLength) * ratio) + 64
+        guard outCapacity > 0,
+              let wireBuffer = AVAudioPCMBuffer(pcmFormat: callWireFormat, frameCapacity: outCapacity) else { return }
+
+        var supplied = false
+        let status = converter.convert(to: wireBuffer, error: nil) { _, outStatus in
+            if supplied {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            outStatus.pointee = .haveData
+            return inputBuffer
+        }
+
+        guard status == .haveData || status == .inputRanDry else { return }
+        let frameLength = Int(wireBuffer.frameLength)
+        guard frameLength > 0,
+              let int16 = wireBuffer.int16ChannelData?[0] else { return }
+
+        let payloadBytes = frameLength * MemoryLayout<Int16>.size
+        let safePayloadBytes = min(payloadBytes, Int(UInt16.max))
+        var header = UInt16(safePayloadBytes).bigEndian
+        var frameData = Data(bytes: &header, count: MemoryLayout<UInt16>.size)
+        frameData.append(Data(bytes: int16, count: safePayloadBytes))
+        writeFramedData(frameData, to: stream)
+    }
+
+    private func writeFramedData(_ data: Data, to stream: OutputStream) {
+        audioQueue.async {
+            data.withUnsafeBytes { rawPtr in
+                guard let base = rawPtr.baseAddress else { return }
+                var remaining = data.count
+                var offset = 0
+                while remaining > 0 {
+                    guard stream.hasSpaceAvailable else { break }
+                    let written = stream.write(base.advanced(by: offset).assumingMemoryBound(to: UInt8.self), maxLength: remaining)
+                    guard written > 0 else { break }
+                    offset += written
+                    remaining -= written
+                }
+            }
+        }
+    }
+
+    private func enqueuePlaybackPayload(
+        _ payload: Data,
+        wireFormat: AVAudioFormat,
+        outputFormat: AVAudioFormat,
+        converter: AVAudioConverter,
+        player: AVAudioPlayerNode
+    ) {
+        let frameCount = payload.count / MemoryLayout<Int16>.size
+        guard frameCount > 0,
+              let wireBuffer = AVAudioPCMBuffer(pcmFormat: wireFormat, frameCapacity: AVAudioFrameCount(frameCount)),
+              let wirePtr = wireBuffer.int16ChannelData?[0] else { return }
+        wireBuffer.frameLength = AVAudioFrameCount(frameCount)
+        payload.withUnsafeBytes { raw in
+            if let base = raw.baseAddress {
+                memcpy(wirePtr, base, payload.count)
+            }
+        }
+
+        let ratio = outputFormat.sampleRate / max(1, wireFormat.sampleRate)
+        let outCapacity = AVAudioFrameCount(Double(wireBuffer.frameLength) * ratio) + 64
+        guard outCapacity > 0,
+              let outBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outCapacity) else { return }
+
+        var supplied = false
+        let status = converter.convert(to: outBuffer, error: nil) { _, outStatus in
+            if supplied {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            outStatus.pointee = .haveData
+            return wireBuffer
+        }
+        guard status == .haveData || status == .inputRanDry else { return }
+        if outBuffer.frameLength > 0 {
+            player.scheduleBuffer(outBuffer, completionHandler: nil)
+        }
+    }
+#endif
 
     @MainActor
     private func teardownAudio() {
@@ -184,7 +283,11 @@ public final class MCStreamCallEngine: CallEngine {
         audioEngine?.stop()
         audioEngine = nil
         playerNode = nil
-        captureFormat = nil
+        wireFormat = nil
+        playbackFormat = nil
+        captureConverter = nil
+        playbackConverter = nil
+        receiveAccumulator.removeAll(keepingCapacity: false)
 #endif
         outputStream?.close()
         inputStream?.close()

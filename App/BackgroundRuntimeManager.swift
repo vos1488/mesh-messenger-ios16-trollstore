@@ -45,11 +45,14 @@ final class BackgroundRuntimeManager {
         keepAlivePlayer = nil
         do {
             let session = AVAudioSession.sharedInstance()
+            session.requestRecordPermission { _ in }
             try session.setCategory(
                 .playAndRecord,
                 mode: .voiceChat,
-                options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker]
+                options: [.allowBluetooth, .defaultToSpeaker]
             )
+            try session.setPreferredSampleRate(48_000)
+            try session.setPreferredIOBufferDuration(0.02)
             try session.setActive(true)
         } catch {}
     }
