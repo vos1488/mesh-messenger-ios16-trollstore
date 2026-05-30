@@ -25,8 +25,12 @@ public final class MCPTransport: NSObject {
     public var onPeerDisconnected: ((PeerID) -> Void)?
 
     private static let serviceType = "meshmsg16"
+
     private let localProfile: PeerProfile
+    // MCPeerID.displayName must be ≤ 63 chars — use first 8 chars of PeerID as suffix
     private let mcLocalPeerID: MCPeerID
+    // Map MCPeerID.displayName → full PeerID (discovered via discoveryInfo)
+    private var peerIDMap: [String: PeerID] = [:]
     private var session: MCSession!
     private let advertiser: MCNearbyServiceAdvertiser
     private let browser: MCNearbyServiceBrowser
@@ -36,14 +40,25 @@ public final class MCPTransport: NSObject {
 
     public init(localProfile: PeerProfile) throws {
         self.localProfile = localProfile
-        mcLocalPeerID = MCPeerID(displayName: localProfile.peerID.value)
+
+        // MCPeerID displayName limit is 63 characters.
+        // Use "nick#XXXXXXXX" (nickname up to 54 chars + "#" + 8-char hex suffix).
+        let shortHex = String(localProfile.peerID.value.prefix(8))
+        let nick = String(localProfile.nickname.prefix(54))
+        let displayName = "\(nick)#\(shortHex)"
+
+        mcLocalPeerID = MCPeerID(displayName: displayName)
 
         let announcement = PeerAnnouncement(profile: localProfile)
         let encodedAnnouncement = String(
             decoding: try JSONEncoder().encode(announcement),
             as: UTF8.self
         )
-        let discoveryInfo = ["profile": encodedAnnouncement, "nick": localProfile.nickname]
+        // Also include full peerID explicitly so we can reconstruct without decoding JSON
+        let discoveryInfo: [String: String] = [
+            "profile": encodedAnnouncement,
+            "pid": localProfile.peerID.value
+        ]
 
         advertiser = MCNearbyServiceAdvertiser(
             peer: mcLocalPeerID,
@@ -75,14 +90,17 @@ public final class MCPTransport: NSObject {
     }
 
     public func send(message: TransportMessage, to peerID: PeerID) throws {
-        let targets = session.connectedPeers.filter { $0.displayName == peerID.value }
+        // Find MCPeerID by matching stored full PeerID
+        let targets = session.connectedPeers.filter { mcPeer in
+            peerIDMap[mcPeer.displayName]?.value == peerID.value
+        }
         guard !targets.isEmpty else { throw TransportError.peerNotConnected }
         let data = try encoder.encode(message)
         try session.send(data, toPeers: targets, with: .reliable)
     }
 
     public func connectedPeerIDs() -> [String] {
-        session.connectedPeers.map { $0.displayName }
+        session.connectedPeers.compactMap { peerIDMap[$0.displayName]?.value }
     }
 }
 
@@ -92,7 +110,7 @@ public enum TransportError: Error {
 
 extension MCPTransport: MCSessionDelegate {
     public func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
-        let meshID = PeerID(peerID.displayName)
+        let meshID = peerIDMap[peerID.displayName] ?? PeerID(peerID.displayName)
         switch state {
         case .connected:    onPeerConnected?(meshID, peerID.displayName)
         case .notConnected: onPeerDisconnected?(meshID)
@@ -102,7 +120,8 @@ extension MCPTransport: MCSessionDelegate {
 
     public func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         guard let msg = try? decoder.decode(TransportMessage.self, from: data) else { return }
-        onMessageReceived?(msg, PeerID(peerID.displayName))
+        let meshID = peerIDMap[peerID.displayName] ?? PeerID(peerID.displayName)
+        onMessageReceived?(msg, meshID)
     }
 
     public func session(_ session: MCSession, didReceive stream: InputStream,
@@ -117,6 +136,12 @@ extension MCPTransport: MCNearbyServiceBrowserDelegate {
     public func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID,
                         withDiscoveryInfo info: [String: String]?) {
         guard peerID.displayName != mcLocalPeerID.displayName else { return }
+
+        // Extract full PeerID from discoveryInfo
+        if let fullPeerIDValue = info?["pid"] {
+            peerIDMap[peerID.displayName] = PeerID(fullPeerIDValue)
+        }
+
         let alreadyConnected = session.connectedPeers.contains { $0.displayName == peerID.displayName }
         guard !alreadyConnected else { return }
         browser.invitePeer(peerID, to: session, withContext: nil, timeout: 10)
