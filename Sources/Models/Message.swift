@@ -69,6 +69,7 @@ public enum OutboxStatus: String, Codable, Sendable {
     case delivered
     case read
     case failed
+    case poisoned
 }
 
 public struct OutboxItem: Codable, Sendable {

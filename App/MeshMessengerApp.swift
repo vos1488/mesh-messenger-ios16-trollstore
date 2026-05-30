@@ -51,7 +51,16 @@ struct RootView: View {
                 }
             )
         }
-        .fullScreenCover(isPresented: .constant(showCallScreen)) {
+        .fullScreenCover(
+            isPresented: Binding(
+                get: { showCallScreen },
+                set: { isPresented in
+                    if !isPresented, store.activeCall?.phase == .ended {
+                        store.activeCall = nil
+                    }
+                }
+            )
+        ) {
             ActiveCallView()
                 .environmentObject(store)
         }

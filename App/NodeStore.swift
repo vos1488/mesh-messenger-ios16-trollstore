@@ -130,6 +130,13 @@ public struct ActiveCallSession: Identifiable, Equatable {
     public var startedAt: Date?
 }
 
+public struct DebugEvent: Identifiable, Equatable {
+    public let id = UUID()
+    public let timestamp: Date
+    public let category: String
+    public let message: String
+}
+
 private let appStoreDir: URL = {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     let dir = docs.appendingPathComponent("MeshMessenger", isDirectory: true)
@@ -150,8 +157,10 @@ public final class NodeStore: ObservableObject {
     @Published public var myPeerURI: String = ""
     @Published public var isRunning: Bool = false
     @Published public var errorMessage: String? = nil
+    @Published public var wanBootstrapRaw: String = ""
+    @Published public var debugEvents: [DebugEvent] = []
 
-    private var transport: MCPTransport?
+    private var transport: HybridTransport?
     private var storageEngine: StorageEngine?
     private var ratchetEngine: RatchetEngine?
     private var identityEngine: IdentityEngine?
@@ -164,6 +173,7 @@ public final class NodeStore: ObservableObject {
     private var incomingFileNames: [UUID: String] = [:]
     private var currentScenePhase: ScenePhase = .active
     private var lastHeartbeatAt: Date = .distantPast
+    private let maxDeliveryAttempts = 8
 
     public static let shared = NodeStore()
     private init() {}
@@ -190,13 +200,15 @@ public final class NodeStore: ObservableObject {
             myPeerIDValue = profile.peerID.value
             myPeerURI = profile.peerID.uri
             nickname = profile.nickname
+            wanBootstrapRaw = UserDefaults.standard.string(forKey: "mesh_wan_bootstrap") ?? ""
 
             loadPersistedData()
 
-            let t = try MCPTransport(
+            let t = try HybridTransport(
                 localProfile: profile,
                 signingPublicKey: identity.identity.signingPublicKey,
-                agreementPublicKey: identity.identity.agreementPublicKey
+                agreementPublicKey: identity.identity.agreementPublicKey,
+                wanBootstrapEndpoints: parseWANEndpoints(from: wanBootstrapRaw)
             )
 
             t.onPeerDiscovered = { [weak self] discovered in
@@ -206,16 +218,19 @@ public final class NodeStore: ObservableObject {
             }
             t.onPeerConnected = { [weak self] peerID, displayName in
                 Task { @MainActor [weak self] in
+                    self?.appendDebug("net", "peer connected: \(peerID.value.prefix(8)) via \(displayName)")
                     self?.handleConnectedPeer(peerID: peerID, displayName: displayName)
                 }
             }
             t.onPeerDisconnected = { [weak self] peerID in
                 Task { @MainActor [weak self] in
+                    self?.appendDebug("net", "peer disconnected: \(peerID.value.prefix(8))")
                     self?.handleDisconnectedPeer(peerID: peerID)
                 }
             }
             t.onMessageReceived = { [weak self] packet, fromPeerID in
                 Task { @MainActor [weak self] in
+                    self?.appendDebug("pkt", "rx \(packet.kind.rawValue) \(packet.id.uuidString.prefix(8)) from \(fromPeerID.value.prefix(8))")
                     await self?.handleIncoming(packet: packet, fromPeerID: fromPeerID)
                 }
             }
@@ -227,14 +242,16 @@ public final class NodeStore: ObservableObject {
             }
 
             transport = t
-            callEngine.weakTransport = t
+            callEngine.weakTransport = t.streamTransport
             t.start()
             startDeliveryLoop()
             requestNotificationPermission()
             isRunning = true
             errorMessage = nil
+            appendDebug("node", "node started as \(myPeerIDValue.prefix(8))")
         } catch {
             errorMessage = error.localizedDescription
+            appendDebug("error", "start failed: \(error.localizedDescription)")
         }
     }
 
@@ -243,11 +260,13 @@ public final class NodeStore: ObservableObject {
         deliveryTask = nil
         transport?.stop()
         transport = nil
+        callEngine.weakTransport = nil
         backgroundRuntime.deactivateCallAudio()
         backgroundRuntime.deactivateKeepAlive()
         incomingCall = nil
         activeCall = nil
         isRunning = false
+        appendDebug("node", "node stopped")
     }
 
     public func onAppBecameActive() {
@@ -259,6 +278,9 @@ public final class NodeStore: ObservableObject {
             if isRunning {
                 processDeliveryQueue()
                 broadcastSyncDigest()
+                for peer in peers where peer.isConnected {
+                    sendLatestReadReceipt(to: peer.peerID.value)
+                }
             } else {
                 await start()
             }
@@ -470,6 +492,7 @@ public final class NodeStore: ObservableObject {
 
     public func startVoiceCall(to peer: PeerEntry) {
         let callID = UUID()
+        appendDebug("call", "invite \(callID.uuidString.prefix(8)) -> \(peer.peerID.value.prefix(8))")
         activeCall = ActiveCallSession(
             id: callID,
             peerID: peer.peerID.value,
@@ -495,12 +518,14 @@ public final class NodeStore: ObservableObject {
         } catch {
             errorMessage = "Не удалось начать звонок: \(error.localizedDescription)"
             activeCall = nil
+            appendDebug("error", "call invite failed: \(error.localizedDescription)")
         }
     }
 
     public func acceptIncomingCall() {
         guard let incoming = incomingCall else { return }
         incomingCall = nil
+        appendDebug("call", "accept \(incoming.id.uuidString.prefix(8)) from \(incoming.peerID.prefix(8))")
 
         // CRITICAL: send callAccept BEFORE changing AVAudioSession
         // (activating voiceChat audio session can disrupt BT/MPC transport)
@@ -518,6 +543,7 @@ public final class NodeStore: ObservableObject {
             }
         } catch {
             errorMessage = "Не удалось принять звонок: \(error.localizedDescription)"
+            appendDebug("error", "call accept send failed: \(error.localizedDescription)")
             return
         }
 
@@ -529,7 +555,7 @@ public final class NodeStore: ObservableObject {
             phase: .connecting,
             startedAt: nil
         )
-        callEngine.weakTransport = transport
+        callEngine.weakTransport = transport?.streamTransport
 
         Task { @MainActor in
             do {
@@ -542,6 +568,7 @@ public final class NodeStore: ObservableObject {
                 errorMessage = "Ошибка звонка: \(error.localizedDescription)"
                 activeCall = nil
                 backgroundRuntime.deactivateCallAudio()
+                appendDebug("error", "call start failed: \(error.localizedDescription)")
             }
         }
     }
@@ -562,6 +589,7 @@ public final class NodeStore: ObservableObject {
 
     public func endCurrentCall() {
         guard let activeCall else { return }
+        appendDebug("call", "end \(activeCall.id.uuidString.prefix(8))")
         let end = TransportMessage(
             kind: .callEnd,
             senderPeerID: myPeerIDValue,
@@ -596,6 +624,13 @@ public final class NodeStore: ObservableObject {
         UserDefaults.standard.set(newNick, forKey: "mesh_nickname")
     }
 
+    public func saveWANBootstrapEndpoints(_ raw: String) {
+        wanBootstrapRaw = raw
+        UserDefaults.standard.set(raw, forKey: "mesh_wan_bootstrap")
+        transport?.updateWANBootstrapEndpoints(parseWANEndpoints(from: raw))
+        appendDebug("wan", "bootstrap updated: \(parseWANEndpoints(from: raw).joined(separator: ", "))")
+    }
+
     public func unreadCount(for peer: PeerEntry) -> Int {
         (messages[peer.peerID.value] ?? []).filter { !$0.isMe && !$0.isRead }.count
     }
@@ -613,6 +648,15 @@ public final class NodeStore: ObservableObject {
     // MARK: - Incoming handling
 
     private func handleIncoming(packet: TransportMessage, fromPeerID: PeerID) async {
+        if packet.ttl <= 0, packet.receiverPeerID != myPeerIDValue {
+            appendDebug("relay", "drop ttl=0 \(packet.id.uuidString.prefix(8))")
+            return
+        }
+        if packet.receiverPeerID != myPeerIDValue, packet.relayPath.contains(myPeerIDValue) {
+            appendDebug("relay", "drop loop \(packet.id.uuidString.prefix(8))")
+            return
+        }
+
         switch packet.kind {
         case .ack:
             handleAck(packet)
@@ -647,8 +691,9 @@ public final class NodeStore: ObservableObject {
             break
         }
 
-        if knownMessageIDs.contains(packet.id) {
-            if packet.kind == .chat {
+        let storedAlready = (try? storageEngine?.hasMessage(messageID: packet.id)) ?? false
+        if knownMessageIDs.contains(packet.id) || storedAlready {
+            if packet.kind == .chat || packet.kind == .relay {
                 sendAck(for: packet.id, to: fromPeerID)
             }
             return
@@ -892,6 +937,7 @@ public final class NodeStore: ObservableObject {
     private func handleIncomingCallInvite(_ packet: TransportMessage, fromPeerID: PeerID) {
         guard packet.receiverPeerID == myPeerIDValue, let callID = packet.callID else { return }
         let media = CallMediaType(rawValue: packet.callMediaType ?? "voice") ?? .voice
+        appendDebug("call", "incoming invite \(callID.uuidString.prefix(8)) from \(fromPeerID.value.prefix(8))")
         incomingCall = IncomingCallOffer(
             id: callID,
             peerID: fromPeerID.value,
@@ -910,7 +956,8 @@ public final class NodeStore: ObservableObject {
               activeCall?.peerID == fromPeerID.value else { return }
 
         activeCall?.phase = .connecting
-        callEngine.weakTransport = transport
+        appendDebug("call", "accepted by \(fromPeerID.value.prefix(8))")
+        callEngine.weakTransport = transport?.streamTransport
 
         Task { @MainActor in
             do {
@@ -923,6 +970,7 @@ public final class NodeStore: ObservableObject {
                 errorMessage = "Ошибка звонка: \(error.localizedDescription)"
                 activeCall = nil
                 backgroundRuntime.deactivateCallAudio()
+                appendDebug("error", "caller start failed: \(error.localizedDescription)")
             }
         }
     }
@@ -932,6 +980,7 @@ public final class NodeStore: ObservableObject {
               activeCall?.id == callID,
               activeCall?.peerID == fromPeerID.value else { return }
         activeCall?.phase = .ended
+        appendDebug("call", "declined by \(fromPeerID.value.prefix(8))")
         backgroundRuntime.deactivateCallAudio()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             self?.activeCall = nil
@@ -948,6 +997,7 @@ public final class NodeStore: ObservableObject {
         Task { @MainActor in
             await callEngine.endCall()
             activeCall?.phase = .ended
+            appendDebug("call", "ended by remote \(fromPeerID.value.prefix(8))")
             backgroundRuntime.deactivateCallAudio()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 self?.activeCall = nil
@@ -964,6 +1014,7 @@ public final class NodeStore: ObservableObject {
             receiverPeerID: "*"
         )
         try? transport.sendToConnectedPeers(message: heartbeat, excludingPeerIDs: [])
+        transport.sendHeartbeat(senderNickname: nickname)
     }
 
     // MARK: - Delivery queue
@@ -990,13 +1041,39 @@ public final class NodeStore: ObservableObject {
 
     private func maybeSendHeartbeat() {
         let now = Date()
-        guard now.timeIntervalSince(lastHeartbeatAt) >= 12 else { return }
+        let minInterval: TimeInterval
+        if activeCall != nil {
+            minInterval = 8
+        } else if currentScenePhase == .background {
+            minInterval = 28
+        } else {
+            minInterval = 12
+        }
+        guard now.timeIntervalSince(lastHeartbeatAt) >= minInterval else { return }
         lastHeartbeatAt = now
         broadcastSyncDigest()
     }
 
     private func attemptDelivery(_ record: StoredMessageRecord) {
         guard let transport, let storageEngine else { return }
+        if record.attempts >= maxDeliveryAttempts {
+            try? storageEngine.markMessageStatus(
+                messageID: record.messageID,
+                status: .poisoned,
+                attempts: record.attempts,
+                nextRetryAt: nil,
+                lastError: "max attempts exceeded"
+            )
+            updateMessageStatus(
+                messageID: record.messageID,
+                status: .poisoned,
+                attempts: record.attempts,
+                nextRetryAt: nil,
+                error: "max attempts exceeded"
+            )
+            appendDebug("delivery", "poisoned \(record.messageID.uuidString.prefix(8))")
+            return
+        }
 
         let packet = TransportMessage(
             id: record.messageID,
@@ -1045,22 +1122,28 @@ public final class NodeStore: ObservableObject {
                 nextRetryAt: nextRetry,
                 error: nil
             )
+            appendDebug("delivery", "sent \(record.messageID.uuidString.prefix(8)) #\(attempts)")
         } catch {
             let attempts = record.attempts + 1
-            let nextRetry = Date().addingTimeInterval(backoffSeconds(forAttempt: attempts))
+            let poisoned = attempts >= maxDeliveryAttempts
+            let nextRetry = poisoned ? nil : Date().addingTimeInterval(backoffSeconds(forAttempt: attempts))
             try? storageEngine.markMessageStatus(
                 messageID: record.messageID,
-                status: .failed,
+                status: poisoned ? .poisoned : .failed,
                 attempts: attempts,
                 nextRetryAt: nextRetry,
                 lastError: error.localizedDescription
             )
             updateMessageStatus(
                 messageID: record.messageID,
-                status: .failed,
+                status: poisoned ? .poisoned : .failed,
                 attempts: attempts,
                 nextRetryAt: nextRetry,
                 error: error.localizedDescription
+            )
+            appendDebug(
+                "delivery",
+                "\(poisoned ? "poisoned" : "retry") \(record.messageID.uuidString.prefix(8)) #\(attempts): \(error.localizedDescription)"
             )
         }
     }
@@ -1123,6 +1206,7 @@ public final class NodeStore: ObservableObject {
             peers.append(peer)
             savePeer(peer)
         }
+        sendLatestReadReceipt(to: peerID.value)
         processDeliveryQueue()
     }
 
@@ -1261,6 +1345,37 @@ public final class NodeStore: ObservableObject {
                 messages[key]?[idx].nextRetryAt = nextRetryAt
                 return
             }
+        }
+    }
+
+    private func sendLatestReadReceipt(to peerID: String) {
+        guard let storageEngine, let transport else { return }
+        guard let latestRead = try? storageEngine.latestReadIncomingMessageID(peerID: peerID) else { return }
+        guard let messageID = latestRead else { return }
+        let receipt = TransportMessage(
+            kind: .readReceipt,
+            senderPeerID: myPeerIDValue,
+            senderNickname: nickname,
+            receiverPeerID: peerID,
+            readForMessageID: messageID
+        )
+        try? transport.send(message: receipt, to: PeerID(peerID))
+    }
+
+    private func parseWANEndpoints(from raw: String) -> [String] {
+        raw
+            .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == ";" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func appendDebug(_ category: String, _ message: String) {
+        debugEvents.insert(
+            DebugEvent(timestamp: Date(), category: category, message: message),
+            at: 0
+        )
+        if debugEvents.count > 400 {
+            debugEvents.removeLast(debugEvents.count - 400)
         }
     }
 

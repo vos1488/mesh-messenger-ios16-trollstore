@@ -1,9 +1,14 @@
 import SwiftUI
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 struct SettingsView: View {
     @EnvironmentObject var store: NodeStore
     @Environment(\.dismiss) var dismiss
     @State private var editedNickname = ""
+    @State private var wanBootstrap = ""
 
     var body: some View {
         NavigationStack {
@@ -62,10 +67,27 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("WAN / Relay") {
+                    TextField("host:port, host:port", text: $wanBootstrap, axis: .vertical)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.system(.caption, design: .monospaced))
+                    Text("Для связи между разными Wi‑Fi/4G укажите bootstrap relay узлы.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Диагностика") {
+                    NavigationLink("Открыть Network/Call debug") {
+                        DebugDiagnosticsView()
+                            .environmentObject(store)
+                    }
+                }
+
                 Section("О приложении") {
                     LabeledContent("Версия", value: "1.0 MVP")
                     LabeledContent("Протокол", value: "MeshMessenger P2P")
-                    LabeledContent("Транспорт", value: "MultipeerConnectivity")
+                    LabeledContent("Транспорт", value: "Hybrid (MCP + UDP)")
                     LabeledContent("Шифрование", value: "AES-256-GCM + Ed25519")
                     LabeledContent("DHT", value: "Kademlia")
                 }
@@ -78,11 +100,15 @@ struct SettingsView: View {
                         if !editedNickname.trimmingCharacters(in: .whitespaces).isEmpty {
                             store.saveNickname(editedNickname.trimmingCharacters(in: .whitespaces))
                         }
+                        store.saveWANBootstrapEndpoints(wanBootstrap)
                         dismiss()
                     }
                 }
             }
-            .onAppear { editedNickname = store.nickname }
+            .onAppear {
+                editedNickname = store.nickname
+                wanBootstrap = store.wanBootstrapRaw
+            }
         }
     }
 }

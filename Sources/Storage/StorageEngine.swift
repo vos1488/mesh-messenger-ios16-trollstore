@@ -101,6 +101,10 @@ public final class StorageEngine {
 
     public func bootstrapSchema() throws {
         let statements = [
+            "PRAGMA journal_mode=WAL;",
+            "PRAGMA synchronous=NORMAL;",
+            "PRAGMA temp_store=MEMORY;",
+            "PRAGMA foreign_keys=ON;",
             """
             CREATE TABLE IF NOT EXISTS Meta (
                 key TEXT PRIMARY KEY,
@@ -233,6 +237,7 @@ public final class StorageEngine {
             """,
             "CREATE INDEX IF NOT EXISTS idx_chat_messages_peer_time ON ChatMessages(peer_id, timestamp DESC);",
             "CREATE INDEX IF NOT EXISTS idx_chat_messages_status_retry ON ChatMessages(status, next_retry_at);",
+            "CREATE INDEX IF NOT EXISTS idx_chat_messages_attempts ON ChatMessages(status, attempts, next_retry_at);",
             "CREATE INDEX IF NOT EXISTS idx_chat_messages_sender ON ChatMessages(sender_id);",
             "CREATE INDEX IF NOT EXISTS idx_routes_destination ON Routes(destination, updated_at DESC);",
             "CREATE INDEX IF NOT EXISTS idx_file_transfers_peer ON FileTransfers(peer_id, updated_at DESC);"
@@ -242,7 +247,7 @@ public final class StorageEngine {
             try execute(sql: sql)
         }
 
-        try execute(sql: "INSERT OR REPLACE INTO Meta(key, value) VALUES('schema_version', '2');")
+        try execute(sql: "INSERT OR REPLACE INTO Meta(key, value) VALUES('schema_version', '3');")
     }
 
     public func save(peer: PeerProfile) throws {
@@ -536,6 +541,23 @@ public final class StorageEngine {
             bindDouble(statement: statement, index: 1, value: readAt.timeIntervalSince1970)
             bindText(statement: statement, index: 2, value: messageID.uuidString)
         }
+    }
+
+    public func latestReadIncomingMessageID(peerID: String) throws -> UUID? {
+        let sql = """
+        SELECT message_id
+        FROM ChatMessages
+        WHERE peer_id = ? AND is_outgoing = 0 AND is_read = 1
+        ORDER BY COALESCE(read_at, timestamp) DESC
+        LIMIT 1;
+        """
+        let rows: [UUID] = try queryPrepared(sql: sql, binder: { statement in
+            bindText(statement: statement, index: 1, value: peerID)
+        }, rowMapper: { statement in
+            guard let raw = columnText(statement: statement, index: 0) else { return nil }
+            return UUID(uuidString: raw)
+        })
+        return rows.first
     }
 
     public func searchMessages(query: String, peerID: String? = nil, limit: Int = 100) throws -> [StoredMessageRecord] {

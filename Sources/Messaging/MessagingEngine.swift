@@ -26,7 +26,7 @@ public actor MessagingEngine {
                     return ($0.nextRetryAt ?? .distantPast) <= now
                 case .sent:
                     return ($0.nextRetryAt ?? .distantPast) <= now
-                case .delivered, .read:
+                case .delivered, .read, .poisoned:
                     return false
                 }
             }

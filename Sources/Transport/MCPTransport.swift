@@ -408,6 +408,7 @@ public final class MCPTransport {
     public var onPeerConnected: ((PeerID, String) -> Void)?
     public var onPeerDisconnected: ((PeerID) -> Void)?
     public var onPeerDiscovered: ((TransportDiscoveredPeer) -> Void)?
+    public var onStreamReceived: ((InputStream, PeerID, String) -> Void)?
 
     public init(localProfile: PeerProfile, signingPublicKey: Data, agreementPublicKey: Data) throws {
         _ = localProfile
@@ -428,6 +429,11 @@ public final class MCPTransport {
     }
     public func isPeerConnected(_ peerID: PeerID) -> Bool { _ = peerID; return false }
     public func connectedPeerIDs() -> [String] { [] }
+    public func startAudioStream(to peerID: PeerID, name: String) throws -> OutputStream {
+        _ = peerID
+        _ = name
+        throw TransportError.peerNotConnected
+    }
     public func peerKeys(peerID: PeerID) -> (signing: Data?, agreement: Data?) { _ = peerID; return (nil, nil) }
 }
 #endif

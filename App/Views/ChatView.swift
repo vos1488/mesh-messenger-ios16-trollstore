@@ -226,11 +226,13 @@ struct MessageBubble: View {
         case .delivered: return "delivered"
         case .read: return "read"
         case .failed: return "failed"
+        case .poisoned: return "poisoned"
         }
     }
 
     private func statusColor(_ status: OutboxStatus) -> Color {
         switch status {
+        case .poisoned: return .orange
         case .failed: return .red
         case .read: return .blue
         case .delivered: return .green
