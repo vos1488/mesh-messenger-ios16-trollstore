@@ -23,9 +23,28 @@ jobs:
       - name: Resolve dependencies
         run: swift package resolve
 
-      - name: Build
-        run: swift build -v
+      - name: Build (debug)
+        run: swift build -v -c debug
 
       - name: Test
         run: swift test -v
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p artifacts
+          cp -r .build/release/MeshMessenger.swiftmodule artifacts/ 2>/dev/null || true
+          cp .build/release/*.a artifacts/ 2>/dev/null || true
+          find .build/release -maxdepth 1 -type f | sort > artifacts/manifest.txt
+          echo "=== Build products ===" && cat artifacts/manifest.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeshMessenger-release-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
 
