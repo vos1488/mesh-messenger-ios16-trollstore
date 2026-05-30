@@ -355,7 +355,7 @@ public final class NodeStore: ObservableObject {
                         peerID: peer.peerID.value,
                         displayName: url.lastPathComponent,
                         sizeBytes: data.count,
-                        chunkSize: await fileTransferEngine.chunkSize,
+                        chunkSize: fileTransferEngine.chunkSize,
                         totalChunks: chunks.count,
                         completedChunks: 0,
                         state: "sending",
@@ -386,7 +386,7 @@ public final class NodeStore: ObservableObject {
                             peerID: peer.peerID.value,
                             displayName: url.lastPathComponent,
                             sizeBytes: data.count,
-                            chunkSize: await fileTransferEngine.chunkSize,
+                            chunkSize: fileTransferEngine.chunkSize,
                             totalChunks: chunks.count,
                             completedChunks: chunk.index + 1,
                             state: progress >= 1 ? "completed" : "sending",
@@ -611,8 +611,8 @@ public final class NodeStore: ObservableObject {
         try? storageEngine?.markMessageStatus(
             messageID: ackFor,
             status: .delivered,
-            deliveredAt: deliveredAt,
-            nextRetryAt: nil
+            nextRetryAt: nil,
+            deliveredAt: deliveredAt
         )
 
         for key in messages.keys {
@@ -689,11 +689,9 @@ public final class NodeStore: ObservableObject {
 
     private func startDeliveryLoop() {
         deliveryTask?.cancel()
-        deliveryTask = Task.detached(priority: .background) { [weak self] in
+        deliveryTask = Task(priority: .background) { [weak self] in
             while !(Task.isCancelled) {
-                await MainActor.run {
-                    self?.processDeliveryQueue()
-                }
+                await MainActor.run { self?.processDeliveryQueue() }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
@@ -709,7 +707,7 @@ public final class NodeStore: ObservableObject {
     }
 
     private func attemptDelivery(_ record: StoredMessageRecord) {
-        guard let transport else { return }
+        guard let transport, let storageEngine else { return }
 
         let packet = TransportMessage(
             id: record.messageID,
