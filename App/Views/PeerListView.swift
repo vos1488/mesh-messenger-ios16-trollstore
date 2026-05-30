@@ -104,7 +104,7 @@ struct PeerRowView: View {
                     .frame(width: 44, height: 44)
                 Text(String(peer.nickname.prefix(1)).uppercased())
                     .font(.headline)
-                    .foregroundStyle(.accentColor)
+                    .foregroundStyle(Color.accentColor)
                 Circle()
                     .fill(peer.isConnected ? .green : .gray)
                     .frame(width: 12, height: 12)

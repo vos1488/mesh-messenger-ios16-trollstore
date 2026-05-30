@@ -14,7 +14,7 @@ struct SettingsView: View {
                         Spacer()
                         TextField("Имя", text: $editedNickname)
                             .multilineTextAlignment(.trailing)
-                            .foregroundStyle(.accentColor)
+                            .foregroundStyle(Color.accentColor)
                     }
                 }
 

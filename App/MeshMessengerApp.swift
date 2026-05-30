@@ -39,7 +39,7 @@ struct LaunchView: View {
             Spacer()
             Image(systemName: "antenna.radiowaves.left.and.right.circle.fill")
                 .font(.system(size: 80))
-                .foregroundStyle(.accentColor)
+                .foregroundStyle(Color.accentColor)
             Text("MeshMessenger")
                 .font(.largeTitle)
                 .bold()

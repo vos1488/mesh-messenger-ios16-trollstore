@@ -85,7 +85,7 @@ struct ChatView: View {
             Button(action: sendMessage) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 32))
-                    .foregroundStyle(inputText.trimmingCharacters(in: .whitespaces).isEmpty ? .gray : .accentColor)
+                    .foregroundStyle(inputText.trimmingCharacters(in: .whitespaces).isEmpty ? Color.gray : Color.accentColor)
             }
             .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty)
         }
