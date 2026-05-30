@@ -168,6 +168,8 @@ public final class NodeStore: ObservableObject {
     private let callEngine = MCStreamCallEngine()
     private let backgroundRuntime = BackgroundRuntimeManager()
     private var deliveryTask: Task<Void, Never>?
+    private var outgoingCallInviteTask: Task<Void, Never>?
+    private var outgoingCallTimeoutTask: Task<Void, Never>?
     private var myPeerIDValue: String = ""
     private var knownMessageIDs: Set<UUID> = []
     private var incomingFileNames: [UUID: String] = [:]
@@ -258,6 +260,7 @@ public final class NodeStore: ObservableObject {
     public func stop() {
         deliveryTask?.cancel()
         deliveryTask = nil
+        cancelOutgoingCallTimers()
         transport?.stop()
         transport = nil
         callEngine.weakTransport = nil
@@ -492,6 +495,7 @@ public final class NodeStore: ObservableObject {
 
     public func startVoiceCall(to peer: PeerEntry) {
         let callID = UUID()
+        cancelOutgoingCallTimers()
         appendDebug("call", "invite \(callID.uuidString.prefix(8)) -> \(peer.peerID.value.prefix(8))")
         activeCall = ActiveCallSession(
             id: callID,
@@ -515,6 +519,7 @@ public final class NodeStore: ObservableObject {
             } else if let transport {
                 try transport.sendToConnectedPeers(message: invite, excludingPeerIDs: [myPeerIDValue])
             }
+            scheduleOutgoingCallRetries(callID: callID, peerID: peer.peerID.value, media: .voice)
         } catch {
             errorMessage = "Не удалось начать звонок: \(error.localizedDescription)"
             activeCall = nil
@@ -542,10 +547,9 @@ public final class NodeStore: ObservableObject {
                 try transport.send(message: accept, to: PeerID(incoming.peerID))
             }
         } catch {
-            errorMessage = "Не удалось принять звонок: \(error.localizedDescription)"
-            appendDebug("error", "call accept send failed: \(error.localizedDescription)")
-            return
+            appendDebug("error", "call accept first send failed: \(error.localizedDescription)")
         }
+        retryCallSignal(message: accept, targetPeerID: incoming.peerID, attempts: 2)
 
         activeCall = ActiveCallSession(
             id: incoming.id,
@@ -584,11 +588,13 @@ public final class NodeStore: ObservableObject {
             callMediaType: incoming.media.rawValue
         )
         try? transport?.send(message: decline, to: PeerID(incoming.peerID))
+        retryCallSignal(message: decline, targetPeerID: incoming.peerID, attempts: 1)
         incomingCall = nil
     }
 
     public func endCurrentCall() {
         guard let activeCall else { return }
+        cancelOutgoingCallTimers()
         appendDebug("call", "end \(activeCall.id.uuidString.prefix(8))")
         let end = TransportMessage(
             kind: .callEnd,
@@ -599,6 +605,7 @@ public final class NodeStore: ObservableObject {
             callMediaType: activeCall.media.rawValue
         )
         try? transport?.send(message: end, to: PeerID(activeCall.peerID))
+        retryCallSignal(message: end, targetPeerID: activeCall.peerID, attempts: 1)
         Task { @MainActor in
             await callEngine.endCall()
             self.activeCall?.phase = .ended
@@ -648,6 +655,8 @@ public final class NodeStore: ObservableObject {
     // MARK: - Incoming handling
 
     private func handleIncoming(packet: TransportMessage, fromPeerID: PeerID) async {
+        let logicalSender = PeerID(packet.senderPeerID)
+
         if packet.ttl <= 0, packet.receiverPeerID != myPeerIDValue {
             appendDebug("relay", "drop ttl=0 \(packet.id.uuidString.prefix(8))")
             return
@@ -666,22 +675,22 @@ public final class NodeStore: ObservableObject {
             return
         case .callInvite:
             if packet.receiverPeerID == myPeerIDValue {
-                handleIncomingCallInvite(packet, fromPeerID: fromPeerID)
+                handleIncomingCallInvite(packet, fromPeerID: logicalSender, relayHopPeerID: fromPeerID)
                 return
             }
         case .callAccept:
             if packet.receiverPeerID == myPeerIDValue {
-                handleIncomingCallAccept(packet, fromPeerID: fromPeerID)
+                handleIncomingCallAccept(packet, fromPeerID: logicalSender, relayHopPeerID: fromPeerID)
                 return
             }
         case .callDecline:
             if packet.receiverPeerID == myPeerIDValue {
-                handleIncomingCallDecline(packet, fromPeerID: fromPeerID)
+                handleIncomingCallDecline(packet, fromPeerID: logicalSender, relayHopPeerID: fromPeerID)
                 return
             }
         case .callEnd:
             if packet.receiverPeerID == myPeerIDValue {
-                handleIncomingCallEnd(packet, fromPeerID: fromPeerID)
+                handleIncomingCallEnd(packet, fromPeerID: logicalSender, relayHopPeerID: fromPeerID)
                 return
             }
         case .syncDigest:
@@ -694,7 +703,7 @@ public final class NodeStore: ObservableObject {
         let storedAlready = (try? storageEngine?.hasMessage(messageID: packet.id)) ?? false
         if knownMessageIDs.contains(packet.id) || storedAlready {
             if packet.kind == .chat || packet.kind == .relay {
-                sendAck(for: packet.id, to: fromPeerID)
+                sendAck(for: packet.id, to: logicalSender)
             }
             return
         }
@@ -707,11 +716,11 @@ public final class NodeStore: ObservableObject {
 
         switch packet.kind {
         case .chat, .relay:
-            let text = await decryptOrFallback(packet: packet, fromPeerID: fromPeerID)
+            let text = await decryptOrFallback(packet: packet, fromPeerID: logicalSender)
             let incoming = StoredMessageRecord(
                 messageID: packet.id,
-                peerID: fromPeerID.value,
-                senderID: fromPeerID.value,
+                peerID: logicalSender.value,
+                senderID: logicalSender.value,
                 senderNickname: packet.senderNickname,
                 textBody: text,
                 timestamp: packet.timestamp,
@@ -738,9 +747,9 @@ public final class NodeStore: ObservableObject {
                 fileChecksum: packet.fileChecksum
             )
             saveMessage(incoming)
-            appendOrUpdateMessage(peerID: fromPeerID.value, mapFromRecord(incoming))
-            upsertPeerFromMessage(senderID: fromPeerID, nickname: packet.senderNickname)
-            sendAck(for: packet.id, to: fromPeerID)
+            appendOrUpdateMessage(peerID: logicalSender.value, mapFromRecord(incoming))
+            upsertPeerFromMessage(senderID: logicalSender, nickname: packet.senderNickname)
+            sendAck(for: packet.id, to: logicalSender)
             notifyIncomingMessage(from: packet.senderNickname, text: text)
 
         case .fileMeta:
@@ -749,7 +758,7 @@ public final class NodeStore: ObservableObject {
                 try? storageEngine?.upsertFileTransfer(
                     StoredFileTransferRecord(
                         fileID: fileID,
-                        peerID: fromPeerID.value,
+                        peerID: logicalSender.value,
                         displayName: name,
                         sizeBytes: 0,
                         chunkSize: awaitChunkSize,
@@ -763,7 +772,7 @@ public final class NodeStore: ObservableObject {
             }
 
         case .fileChunk:
-            handleIncomingFileChunk(packet: packet, fromPeerID: fromPeerID)
+            handleIncomingFileChunk(packet: packet, fromPeerID: logicalSender)
 
         case .ack, .readReceipt, .callInvite, .callAccept, .callDecline, .callEnd:
             break
@@ -934,10 +943,25 @@ public final class NodeStore: ObservableObject {
         try? transport.send(message: ack, to: peerID)
     }
 
-    private func handleIncomingCallInvite(_ packet: TransportMessage, fromPeerID: PeerID) {
+    private func handleIncomingCallInvite(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
         guard packet.receiverPeerID == myPeerIDValue, let callID = packet.callID else { return }
         let media = CallMediaType(rawValue: packet.callMediaType ?? "voice") ?? .voice
-        appendDebug("call", "incoming invite \(callID.uuidString.prefix(8)) from \(fromPeerID.value.prefix(8))")
+        appendDebug(
+            "call",
+            "incoming invite \(callID.uuidString.prefix(8)) from \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))"
+        )
+        if let current = activeCall, current.phase != .ended {
+            let decline = TransportMessage(
+                kind: .callDecline,
+                senderPeerID: myPeerIDValue,
+                senderNickname: nickname,
+                receiverPeerID: fromPeerID.value,
+                callID: callID,
+                callMediaType: media.rawValue
+            )
+            try? transport?.send(message: decline, to: fromPeerID)
+            return
+        }
         incomingCall = IncomingCallOffer(
             id: callID,
             peerID: fromPeerID.value,
@@ -950,13 +974,15 @@ public final class NodeStore: ObservableObject {
         }
     }
 
-    private func handleIncomingCallAccept(_ packet: TransportMessage, fromPeerID: PeerID) {
+    private func handleIncomingCallAccept(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
         guard let callID = packet.callID,
               activeCall?.id == callID,
               activeCall?.peerID == fromPeerID.value else { return }
+        guard activeCall?.phase != .active else { return }
 
+        cancelOutgoingCallTimers()
         activeCall?.phase = .connecting
-        appendDebug("call", "accepted by \(fromPeerID.value.prefix(8))")
+        appendDebug("call", "accepted by \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))")
         callEngine.weakTransport = transport?.streamTransport
 
         Task { @MainActor in
@@ -975,29 +1001,31 @@ public final class NodeStore: ObservableObject {
         }
     }
 
-    private func handleIncomingCallDecline(_ packet: TransportMessage, fromPeerID: PeerID) {
+    private func handleIncomingCallDecline(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
         guard let callID = packet.callID,
               activeCall?.id == callID,
               activeCall?.peerID == fromPeerID.value else { return }
+        cancelOutgoingCallTimers()
         activeCall?.phase = .ended
-        appendDebug("call", "declined by \(fromPeerID.value.prefix(8))")
+        appendDebug("call", "declined by \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))")
         backgroundRuntime.deactivateCallAudio()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             self?.activeCall = nil
         }
     }
 
-    private func handleIncomingCallEnd(_ packet: TransportMessage, fromPeerID: PeerID) {
+    private func handleIncomingCallEnd(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
         if let incoming = incomingCall, incoming.id == packet.callID, incoming.peerID == fromPeerID.value {
             incomingCall = nil
         }
         guard let callID = packet.callID,
               activeCall?.id == callID,
               activeCall?.peerID == fromPeerID.value else { return }
+        cancelOutgoingCallTimers()
         Task { @MainActor in
             await callEngine.endCall()
             activeCall?.phase = .ended
-            appendDebug("call", "ended by remote \(fromPeerID.value.prefix(8))")
+            appendDebug("call", "ended by remote \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))")
             backgroundRuntime.deactivateCallAudio()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 self?.activeCall = nil
@@ -1151,6 +1179,75 @@ public final class NodeStore: ObservableObject {
     private func backoffSeconds(forAttempt attempt: Int) -> TimeInterval {
         let raw = pow(2.0, Double(max(1, attempt)))
         return min(120, raw)
+    }
+
+    // MARK: - Call reliability
+
+    private func scheduleOutgoingCallRetries(callID: UUID, peerID: String, media: CallMediaType) {
+        outgoingCallInviteTask?.cancel()
+        outgoingCallTimeoutTask?.cancel()
+
+        outgoingCallInviteTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for attempt in 2...5 {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled else { return }
+                guard let current = self.activeCall, current.id == callID, current.phase == .ringing else { return }
+
+                let invite = TransportMessage(
+                    kind: .callInvite,
+                    senderPeerID: self.myPeerIDValue,
+                    senderNickname: self.nickname,
+                    receiverPeerID: peerID,
+                    callID: callID,
+                    callMediaType: media.rawValue
+                )
+                if let transport = self.transport {
+                    do {
+                        try transport.send(message: invite, to: PeerID(peerID))
+                    } catch {
+                        try? transport.sendToConnectedPeers(message: invite, excludingPeerIDs: [self.myPeerIDValue])
+                    }
+                }
+                self.appendDebug("call", "re-invite \(callID.uuidString.prefix(8)) attempt \(attempt)")
+            }
+        }
+
+        outgoingCallTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 25_000_000_000)
+            guard let self else { return }
+            guard let current = self.activeCall, current.id == callID, current.phase == .ringing else { return }
+            self.errorMessage = "Звонок не принят (таймаут)"
+            self.appendDebug("call", "timeout \(callID.uuidString.prefix(8))")
+            self.activeCall?.phase = .ended
+            self.backgroundRuntime.deactivateCallAudio()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.activeCall = nil
+            }
+        }
+    }
+
+    private func retryCallSignal(message: TransportMessage, targetPeerID: String, attempts: Int) {
+        guard attempts > 0 else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for n in 1...attempts {
+                try? await Task.sleep(nanoseconds: UInt64(700_000_000 * n))
+                guard let transport = self.transport else { return }
+                do {
+                    try transport.send(message: message, to: PeerID(targetPeerID))
+                } catch {
+                    try? transport.sendToConnectedPeers(message: message, excludingPeerIDs: [self.myPeerIDValue])
+                }
+            }
+        }
+    }
+
+    private func cancelOutgoingCallTimers() {
+        outgoingCallInviteTask?.cancel()
+        outgoingCallInviteTask = nil
+        outgoingCallTimeoutTask?.cancel()
+        outgoingCallTimeoutTask = nil
     }
 
     // MARK: - Peer management
