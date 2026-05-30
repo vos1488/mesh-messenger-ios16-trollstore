@@ -237,8 +237,8 @@ extension MCPTransport: MCNearbyServiceBrowserDelegate {
         guard peerID.displayName != mcLocalPeerID.displayName else { return }
 
         let fullPeerID = PeerID(info?["pid"] ?? peerID.displayName)
-        let signing = info?["spk"].flatMap(Data.init(base64Encoded:))
-        let agreement = info?["apk"].flatMap(Data.init(base64Encoded:))
+        let signing = info?["spk"].flatMap { Data(base64Encoded: $0) }
+        let agreement = info?["apk"].flatMap { Data(base64Encoded: $0) }
         peerInfoMap[peerID.displayName] = PeerCryptoInfo(
             peerID: fullPeerID,
             signingPublicKey: signing,

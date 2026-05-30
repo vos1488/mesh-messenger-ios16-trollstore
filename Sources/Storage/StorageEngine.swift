@@ -851,7 +851,7 @@ public final class StorageEngine {
             sqlite3_bind_null(statement, index)
             return
         }
-        value.withUnsafeBytes { raw in
+        _ = value.withUnsafeBytes { raw in
             sqlite3_bind_blob(statement, index, raw.baseAddress, Int32(raw.count), transient)
         }
         #else

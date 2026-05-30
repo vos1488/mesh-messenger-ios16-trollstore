@@ -19,7 +19,7 @@ public actor MessagingEngine {
 
     public func pendingMessages(limit: Int = 50) -> [OutboxItem] {
         let now = Date()
-        outbox.values
+        return outbox.values
             .filter {
                 switch $0.status {
                 case .queued, .pending, .failed:
