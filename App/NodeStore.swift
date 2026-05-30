@@ -513,22 +513,17 @@ public final class NodeStore: ObservableObject {
             callID: callID,
             callMediaType: CallMediaType.voice.rawValue
         )
-        do {
-            if let transport, transport.isPeerConnected(peer.peerID) {
-                try transport.send(message: invite, to: peer.peerID)
-            } else if let transport {
-                try transport.sendToConnectedPeers(message: invite, excludingPeerIDs: [myPeerIDValue])
-            }
+        if sendCallSignal(invite, targetPeerID: peer.peerID.value) {
             scheduleOutgoingCallRetries(callID: callID, peerID: peer.peerID.value, media: .voice)
-        } catch {
-            errorMessage = "Не удалось начать звонок: \(error.localizedDescription)"
+        } else {
+            errorMessage = "Не удалось начать звонок"
             activeCall = nil
-            appendDebug("error", "call invite failed: \(error.localizedDescription)")
         }
     }
 
-    public func acceptIncomingCall() {
-        guard let incoming = incomingCall else { return }
+    public func acceptIncomingCall(_ offer: IncomingCallOffer? = nil) {
+        let incoming = offer ?? incomingCall
+        guard let incoming else { return }
         incomingCall = nil
         appendDebug("call", "accept \(incoming.id.uuidString.prefix(8)) from \(incoming.peerID.prefix(8))")
 
@@ -542,12 +537,8 @@ public final class NodeStore: ObservableObject {
             callID: incoming.id,
             callMediaType: incoming.media.rawValue
         )
-        do {
-            if let transport {
-                try transport.send(message: accept, to: PeerID(incoming.peerID))
-            }
-        } catch {
-            appendDebug("error", "call accept first send failed: \(error.localizedDescription)")
+        if !sendCallSignal(accept, targetPeerID: incoming.peerID) {
+            appendDebug("error", "call accept first send failed")
         }
         retryCallSignal(message: accept, targetPeerID: incoming.peerID, attempts: 2)
 
@@ -577,8 +568,9 @@ public final class NodeStore: ObservableObject {
         }
     }
 
-    public func declineIncomingCall() {
-        guard let incoming = incomingCall else { return }
+    public func declineIncomingCall(_ offer: IncomingCallOffer? = nil) {
+        let incoming = offer ?? incomingCall
+        guard let incoming else { return }
         let decline = TransportMessage(
             kind: .callDecline,
             senderPeerID: myPeerIDValue,
@@ -587,7 +579,7 @@ public final class NodeStore: ObservableObject {
             callID: incoming.id,
             callMediaType: incoming.media.rawValue
         )
-        try? transport?.send(message: decline, to: PeerID(incoming.peerID))
+        _ = sendCallSignal(decline, targetPeerID: incoming.peerID)
         retryCallSignal(message: decline, targetPeerID: incoming.peerID, attempts: 1)
         incomingCall = nil
     }
@@ -604,7 +596,7 @@ public final class NodeStore: ObservableObject {
             callID: activeCall.id,
             callMediaType: activeCall.media.rawValue
         )
-        try? transport?.send(message: end, to: PeerID(activeCall.peerID))
+        _ = sendCallSignal(end, targetPeerID: activeCall.peerID)
         retryCallSignal(message: end, targetPeerID: activeCall.peerID, attempts: 1)
         Task { @MainActor in
             await callEngine.endCall()
@@ -903,7 +895,7 @@ public final class NodeStore: ObservableObject {
         }
         let relayPacket = TransportMessage(
             id: packet.id,
-            kind: .relay,
+            kind: packet.kind,
             senderPeerID: packet.senderPeerID,
             senderNickname: packet.senderNickname,
             receiverPeerID: packet.receiverPeerID,
@@ -946,6 +938,10 @@ public final class NodeStore: ObservableObject {
     private func handleIncomingCallInvite(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
         guard packet.receiverPeerID == myPeerIDValue, let callID = packet.callID else { return }
         let media = CallMediaType(rawValue: packet.callMediaType ?? "voice") ?? .voice
+        if let existing = incomingCall, existing.id == callID {
+            appendDebug("call", "duplicate invite \(callID.uuidString.prefix(8))")
+            return
+        }
         appendDebug(
             "call",
             "incoming invite \(callID.uuidString.prefix(8)) from \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))"
@@ -959,7 +955,8 @@ public final class NodeStore: ObservableObject {
                 callID: callID,
                 callMediaType: media.rawValue
             )
-            try? transport?.send(message: decline, to: fromPeerID)
+            _ = sendCallSignal(decline, targetPeerID: fromPeerID.value)
+            retryCallSignal(message: decline, targetPeerID: fromPeerID.value, attempts: 1)
             return
         }
         incomingCall = IncomingCallOffer(
@@ -976,8 +973,7 @@ public final class NodeStore: ObservableObject {
 
     private func handleIncomingCallAccept(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
         guard let callID = packet.callID,
-              activeCall?.id == callID,
-              activeCall?.peerID == fromPeerID.value else { return }
+              activeCall?.id == callID else { return }
         guard activeCall?.phase != .active else { return }
 
         cancelOutgoingCallTimers()
@@ -1003,8 +999,7 @@ public final class NodeStore: ObservableObject {
 
     private func handleIncomingCallDecline(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
         guard let callID = packet.callID,
-              activeCall?.id == callID,
-              activeCall?.peerID == fromPeerID.value else { return }
+              activeCall?.id == callID else { return }
         cancelOutgoingCallTimers()
         activeCall?.phase = .ended
         appendDebug("call", "declined by \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))")
@@ -1015,12 +1010,11 @@ public final class NodeStore: ObservableObject {
     }
 
     private func handleIncomingCallEnd(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
-        if let incoming = incomingCall, incoming.id == packet.callID, incoming.peerID == fromPeerID.value {
+        if let incoming = incomingCall, incoming.id == packet.callID {
             incomingCall = nil
         }
         guard let callID = packet.callID,
-              activeCall?.id == callID,
-              activeCall?.peerID == fromPeerID.value else { return }
+              activeCall?.id == callID else { return }
         cancelOutgoingCallTimers()
         Task { @MainActor in
             await callEngine.endCall()
@@ -1233,12 +1227,34 @@ public final class NodeStore: ObservableObject {
             guard let self else { return }
             for n in 1...attempts {
                 try? await Task.sleep(nanoseconds: UInt64(700_000_000 * n))
-                guard let transport = self.transport else { return }
+                guard self.transport != nil else { return }
+                _ = self.sendCallSignal(message, targetPeerID: targetPeerID)
+            }
+        }
+    }
+
+    @discardableResult
+    private func sendCallSignal(_ message: TransportMessage, targetPeerID: String) -> Bool {
+        guard let transport else { return false }
+        let target = PeerID(targetPeerID)
+        do {
+            if transport.isPeerConnected(target) {
+                try transport.send(message: message, to: target)
+            } else {
                 do {
-                    try transport.send(message: message, to: PeerID(targetPeerID))
+                    try transport.send(message: message, to: target)
                 } catch {
-                    try? transport.sendToConnectedPeers(message: message, excludingPeerIDs: [self.myPeerIDValue])
+                    try transport.sendToConnectedPeers(message: message, excludingPeerIDs: [myPeerIDValue])
                 }
+            }
+            return true
+        } catch {
+            do {
+                try transport.sendToConnectedPeers(message: message, excludingPeerIDs: [myPeerIDValue])
+                return true
+            } catch {
+                appendDebug("error", "call signal \(message.kind.rawValue) failed: \(error.localizedDescription)")
+                return false
             }
         }
     }

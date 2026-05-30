@@ -44,10 +44,10 @@ struct RootView: View {
                 title: Text("Входящий звонок"),
                 message: Text("\(offer.peerNickname) (\(offer.media.rawValue))"),
                 primaryButton: .default(Text("Ответить")) {
-                    store.acceptIncomingCall()
+                    store.acceptIncomingCall(offer)
                 },
                 secondaryButton: .destructive(Text("Отклонить")) {
-                    store.declineIncomingCall()
+                    store.declineIncomingCall(offer)
                 }
             )
         }
