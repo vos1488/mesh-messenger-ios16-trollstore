@@ -1350,8 +1350,7 @@ public final class NodeStore: ObservableObject {
 
     private func sendLatestReadReceipt(to peerID: String) {
         guard let storageEngine, let transport else { return }
-        guard let latestRead = try? storageEngine.latestReadIncomingMessageID(peerID: peerID) else { return }
-        guard let messageID = latestRead else { return }
+        guard let messageID = try? storageEngine.latestReadIncomingMessageID(peerID: peerID) else { return }
         let receipt = TransportMessage(
             kind: .readReceipt,
             senderPeerID: myPeerIDValue,

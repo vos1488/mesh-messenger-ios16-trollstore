@@ -167,7 +167,7 @@ public final class MCStreamCallEngine: CallEngine {
         pcm.frameLength = AVAudioFrameCount(frameCount)
         buf.withUnsafeBytes { rawPtr in
             if let ptr = rawPtr.bindMemory(to: Float.self).baseAddress {
-                floatPtr.assign(from: ptr, count: frameCount)
+                floatPtr.update(from: ptr, count: frameCount)
             }
         }
         player.scheduleBuffer(pcm, completionHandler: nil)
