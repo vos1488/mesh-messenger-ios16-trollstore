@@ -51,7 +51,7 @@ public final class MCStreamCallEngine: CallEngine {
             outStream = try? transport.startAudioStream(to: peerID, name: "call-audio")
             if let s = outStream {
                 outputStream = s
-                s.schedule(on: .main, forMode: .default)
+                s.schedule(in: .main, forMode: .default)
                 s.open()
             }
         }
@@ -139,7 +139,7 @@ public final class MCStreamCallEngine: CallEngine {
 
     private func startReceiving(stream: InputStream) {
         inputStream = stream
-        stream.schedule(on: .main, forMode: .default)
+        stream.schedule(in: .main, forMode: .default)
         stream.open()
 
         streamReadTimer?.invalidate()

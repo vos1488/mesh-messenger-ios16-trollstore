@@ -11,7 +11,7 @@ public final class Node {
     public let dhtEngine: DHTEngine
     public let storageEngine: StorageEngine
     public let discoveryEngine: any DiscoveryEngine
-    public let callEngine: WebRTCCallEngine
+    public let callEngine: any CallEngine
     public var onStorageError: ((Error) -> Void)?
     public var onDiscoveryError: ((Error) -> Void)?
 
@@ -30,7 +30,7 @@ public final class Node {
         storageEngine = try StorageEngine(databaseURL: databaseURL)
         try storageEngine.bootstrapSchema()
         discoveryEngine = try MCPDiscoveryEngine(localProfile: identityEngine.identity.profile)
-        callEngine = WebRTCCallEngine()
+        callEngine = MCStreamCallEngine()
 
         discoveryEngine.onPeerFound = { [weak self] profile in
             guard let self else { return }
