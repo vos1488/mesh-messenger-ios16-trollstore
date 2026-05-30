@@ -119,13 +119,20 @@ struct PeerRowView: View {
                 Text(peer.nickname)
                     .font(.headline)
                     .lineLimit(1)
+                if let warning = peer.trustWarning, !warning.isEmpty {
+                    Text("⚠️ \(warning)")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                }
                 if let last = lastMessage {
                     Text((last.isMe ? "Вы: " : "") + last.text)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 } else {
-                    Text(peer.isConnected ? "Подключён" : "Был: \(relativeTime(peer.lastSeen))")
+                    let trustSuffix = peer.isVerified ? " • verified" : ""
+                    Text((peer.isConnected ? "Подключён" : "Был: \(relativeTime(peer.lastSeen))") + trustSuffix)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

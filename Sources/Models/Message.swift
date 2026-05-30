@@ -63,8 +63,11 @@ public struct MessageEnvelope: Codable, Sendable, Hashable {
 }
 
 public enum OutboxStatus: String, Codable, Sendable {
+    case queued
     case pending
+    case sent
     case delivered
+    case read
     case failed
 }
 
@@ -72,11 +75,24 @@ public struct OutboxItem: Codable, Sendable {
     public let envelope: MessageEnvelope
     public var status: OutboxStatus
     public var attempts: Int
+    public var nextRetryAt: Date?
+    public var deliveredAt: Date?
+    public var readAt: Date?
 
-    public init(envelope: MessageEnvelope, status: OutboxStatus = .pending, attempts: Int = 0) {
+    public init(
+        envelope: MessageEnvelope,
+        status: OutboxStatus = .queued,
+        attempts: Int = 0,
+        nextRetryAt: Date? = nil,
+        deliveredAt: Date? = nil,
+        readAt: Date? = nil
+    ) {
         self.envelope = envelope
         self.status = status
         self.attempts = attempts
+        self.nextRetryAt = nextRetryAt
+        self.deliveredAt = deliveredAt
+        self.readAt = readAt
     }
 }
 

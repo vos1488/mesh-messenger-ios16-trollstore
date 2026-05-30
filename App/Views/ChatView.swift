@@ -1,10 +1,11 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     let peer: PeerEntry
     @EnvironmentObject var store: NodeStore
     @State private var inputText = ""
-    @State private var scrollProxy: ScrollViewProxy? = nil
+    @State private var isShowingFileImporter = false
 
     private var messages: [ChatMessage] {
         store.messages[peer.peerID.value] ?? []
@@ -35,6 +36,7 @@ struct ChatView: View {
                     if let last = messages.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
+                    store.markConversationRead(peerID: peer.peerID.value)
                 }
             }
 
@@ -54,6 +56,17 @@ struct ChatView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+        .onChange(of: messages.count) { _ in
+            store.markConversationRead(peerID: peer.peerID.value)
+        }
+        .fileImporter(
+            isPresented: $isShowingFileImporter,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            store.sendFile(at: url, to: peer)
         }
     }
 
@@ -76,6 +89,14 @@ struct ChatView: View {
 
     private var inputBar: some View {
         HStack(spacing: 10) {
+            Button {
+                isShowingFileImporter = true
+            } label: {
+                Image(systemName: "paperclip.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundStyle(Color.accentColor)
+            }
+
             TextField("Сообщение…", text: $inputText, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
@@ -131,6 +152,12 @@ struct MessageBubble: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 4)
+                if message.isMe {
+                    Text(statusText(message.status))
+                        .font(.caption2)
+                        .foregroundStyle(statusColor(message.status))
+                        .padding(.horizontal, 4)
+                }
             }
 
             if !message.isMe { Spacer(minLength: 40) }
@@ -141,5 +168,24 @@ struct MessageBubble: View {
         let f = DateFormatter()
         f.timeStyle = .short
         return f.string(from: date)
+    }
+
+    private func statusText(_ status: OutboxStatus) -> String {
+        switch status {
+        case .queued, .pending: return "queued"
+        case .sent: return "sent"
+        case .delivered: return "delivered"
+        case .read: return "read"
+        case .failed: return "failed"
+        }
+    }
+
+    private func statusColor(_ status: OutboxStatus) -> Color {
+        switch status {
+        case .failed: return .red
+        case .read: return .blue
+        case .delivered: return .green
+        case .sent, .queued, .pending: return .secondary
+        }
     }
 }

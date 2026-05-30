@@ -14,6 +14,7 @@ struct MeshMessengerApp: App {
 
 struct RootView: View {
     @EnvironmentObject var store: NodeStore
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -26,6 +27,11 @@ struct RootView: View {
         .task {
             if !store.isRunning {
                 await store.start()
+            }
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                store.onAppBecameActive()
             }
         }
     }
