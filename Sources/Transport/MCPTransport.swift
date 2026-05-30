@@ -71,7 +71,7 @@ public final class MCPTransport: NSObject {
         session = MCSession(
             peer: mcLocalPeerID,
             securityIdentity: nil,
-            encryptionPreference: .required
+            encryptionPreference: .none  // TrollStore has no valid cert; we use our own E2EE
         )
         session.delegate = self
         advertiser.delegate = self

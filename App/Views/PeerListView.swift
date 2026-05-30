@@ -54,9 +54,13 @@ struct PeerListView: View {
     private var peerList: some View {
         List {
             Section("Узлы сети (\(store.peers.count))") {
-                ForEach(store.peers) { peer in
+                ForEach(store.peers.sorted { a, b in
+                    let aLast = store.messages[a.peerID.value]?.last?.timestamp ?? a.lastSeen
+                    let bLast = store.messages[b.peerID.value]?.last?.timestamp ?? b.lastSeen
+                    return aLast > bLast
+                }) { peer in
                     NavigationLink(destination: ChatView(peer: peer).environmentObject(store)) {
-                        PeerRowView(peer: peer)
+                        PeerRowView(peer: peer, lastMessage: store.messages[peer.peerID.value]?.last)
                     }
                 }
             }
@@ -95,6 +99,7 @@ struct PeerListView: View {
 
 struct PeerRowView: View {
     let peer: PeerEntry
+    var lastMessage: ChatMessage? = nil
 
     var body: some View {
         HStack {
@@ -114,14 +119,25 @@ struct PeerRowView: View {
                 Text(peer.nickname)
                     .font(.headline)
                     .lineLimit(1)
-                Text(peer.isConnected ? "Подключён" : "Последний раз: \(relativeTime(peer.lastSeen))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if let last = lastMessage {
+                    Text((last.isMe ? "Вы: " : "") + last.text)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else {
+                    Text(peer.isConnected ? "Подключён" : "Был: \(relativeTime(peer.lastSeen))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            VStack(alignment: .trailing, spacing: 4) {
+                if let last = lastMessage {
+                    Text(timeString(last.timestamp))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .padding(.vertical, 4)
     }
@@ -131,5 +147,13 @@ struct PeerRowView: View {
         if interval < 60 { return "только что" }
         if interval < 3600 { return "\(Int(interval/60)) мин. назад" }
         return "\(Int(interval/3600)) ч. назад"
+    }
+
+    private func timeString(_ date: Date) -> String {
+        let cal = Calendar.current
+        if cal.isDateInToday(date) {
+            let f = DateFormatter(); f.timeStyle = .short; return f.string(from: date)
+        }
+        let f = DateFormatter(); f.dateFormat = "d MMM"; return f.string(from: date)
     }
 }
