@@ -88,7 +88,7 @@ struct ChatView: View {
                     .font(.subheadline)
                     .bold()
                 if let startedAt = call.startedAt {
-                    Text("Начат \(timeString(startedAt))")
+                    Text("Начат \(callTimeString(startedAt))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -155,6 +155,21 @@ struct ChatView: View {
         store.send(text: text, to: peer)
         inputText = ""
     }
+
+    private func callTimeString(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f.string(from: date)
+    }
+
+    private func phaseText(_ phase: ActiveCallSession.Phase) -> String {
+        switch phase {
+        case .ringing: return "ожидание ответа"
+        case .connecting: return "подключение"
+        case .active: return "активен"
+        case .ended: return "завершён"
+        }
+    }
 }
 
 struct MessageBubble: View {
@@ -202,15 +217,6 @@ struct MessageBubble: View {
         let f = DateFormatter()
         f.timeStyle = .short
         return f.string(from: date)
-    }
-
-    private func phaseText(_ phase: ActiveCallSession.Phase) -> String {
-        switch phase {
-        case .ringing: return "ожидание ответа"
-        case .connecting: return "подключение"
-        case .active: return "активен"
-        case .ended: return "завершён"
-        }
     }
 
     private func statusText(_ status: OutboxStatus) -> String {
