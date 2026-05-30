@@ -2,77 +2,67 @@ import SwiftUI
 
 @main
 struct MeshMessengerApp: App {
+    @StateObject private var store = NodeStore.shared
+
     var body: some Scene {
         WindowGroup {
-            HomeView()
+            RootView()
+                .environmentObject(store)
         }
     }
 }
 
-struct HomeView: View {
-    enum LaunchState {
-        case idle
-        case loading
-        case ready(peerURI: String)
-        case failed(message: String)
-    }
-
-    @State private var launchState: LaunchState = .idle
+struct RootView: View {
+    @EnvironmentObject var store: NodeStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        Group {
+            if store.isRunning {
+                PeerListView()
+            } else {
+                LaunchView()
+            }
+        }
+        .task {
+            if !store.isRunning {
+                await store.start()
+            }
+        }
+    }
+}
+
+struct LaunchView: View {
+    @EnvironmentObject var store: NodeStore
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: "antenna.radiowaves.left.and.right.circle.fill")
+                .font(.system(size: 80))
+                .foregroundStyle(.accentColor)
             Text("MeshMessenger")
                 .font(.largeTitle)
                 .bold()
+            Text("Децентрализованный P2P мессенджер")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
 
-            switch launchState {
-            case .idle, .loading:
-                ProgressView()
-                Text("Запуск узла…")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-
-            case .ready(let peerURI):
-                Text("PeerID")
-                    .font(.headline)
-                Text(peerURI)
-                    .font(.footnote)
-                    .textSelection(.enabled)
-                Text("Готов к mesh discovery")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-
-            case .failed(let message):
-                Text("Не удалось инициализировать узел")
-                    .font(.headline)
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button("Повторить") {
-                    Task { await initializeIdentity() }
+            if let error = store.errorMessage {
+                VStack(spacing: 8) {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Button("Повторить") {
+                        Task { await store.start() }
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
+            } else {
+                ProgressView("Запуск узла…")
             }
-        }
-        .padding()
-        .task {
-            if case .idle = launchState {
-                await initializeIdentity()
-            }
-        }
-    }
-
-    private func initializeIdentity() async {
-        launchState = .loading
-        do {
-            let identity = try await Task.detached(priority: .userInitiated) {
-                try IdentityEngine(
-                    nickname: "iOS Node",
-                    capabilities: [.chat, .voice, .video, .relay, .files]
-                )
-            }.value
-            launchState = .ready(peerURI: identity.identity.profile.peerID.uri)
-        } catch {
-            launchState = .failed(message: error.localizedDescription)
+            Spacer()
         }
     }
 }

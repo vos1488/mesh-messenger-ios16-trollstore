@@ -26,6 +26,11 @@
 	<string>Bluetooth is required for peer discovery in mesh mode.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Local network access is required for peer discovery and relay routing.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_meshmsg16._tcp</string>
+		<string>_meshmsg16._udp</string>
+	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchScreen</key>
