@@ -30,9 +30,19 @@ struct RootView: View {
             }
         }
         .onChange(of: scenePhase) { phase in
-            if phase == .active {
-                store.onAppBecameActive()
-            }
+            store.handleScenePhase(phase)
+        }
+        .alert(item: $store.incomingCall) { offer in
+            Alert(
+                title: Text("Входящий звонок"),
+                message: Text("\(offer.peerNickname) (\(offer.media.rawValue))"),
+                primaryButton: .default(Text("Ответить")) {
+                    store.acceptIncomingCall()
+                },
+                secondaryButton: .destructive(Text("Отклонить")) {
+                    store.declineIncomingCall()
+                }
+            )
         }
     }
 }

@@ -106,6 +106,30 @@ public struct ChatMessage: Identifiable, Equatable, Codable {
     }
 }
 
+public struct IncomingCallOffer: Identifiable, Equatable {
+    public let id: UUID
+    public let peerID: String
+    public let peerNickname: String
+    public let media: CallMediaType
+    public let timestamp: Date
+}
+
+public struct ActiveCallSession: Identifiable, Equatable {
+    public enum Phase: String {
+        case ringing
+        case connecting
+        case active
+        case ended
+    }
+
+    public let id: UUID
+    public let peerID: String
+    public let peerNickname: String
+    public let media: CallMediaType
+    public var phase: Phase
+    public var startedAt: Date?
+}
+
 private let appStoreDir: URL = {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     let dir = docs.appendingPathComponent("MeshMessenger", isDirectory: true)
@@ -120,6 +144,8 @@ public final class NodeStore: ObservableObject {
     @Published public var peers: [PeerEntry] = []
     @Published public var messages: [String: [ChatMessage]] = [:]
     @Published public var fileProgress: [UUID: Double] = [:]
+    @Published public var incomingCall: IncomingCallOffer?
+    @Published public var activeCall: ActiveCallSession?
     @Published public var nickname: String = "iOS Node"
     @Published public var myPeerURI: String = ""
     @Published public var isRunning: Bool = false
@@ -130,10 +156,14 @@ public final class NodeStore: ObservableObject {
     private var ratchetEngine: RatchetEngine?
     private var identityEngine: IdentityEngine?
     private let fileTransferEngine = FileTransferEngine()
+    private let callEngine = WebRTCCallEngine()
+    private let backgroundRuntime = BackgroundRuntimeManager()
     private var deliveryTask: Task<Void, Never>?
     private var myPeerIDValue: String = ""
     private var knownMessageIDs: Set<UUID> = []
     private var incomingFileNames: [UUID: String] = [:]
+    private var currentScenePhase: ScenePhase = .active
+    private var lastHeartbeatAt: Date = .distantPast
 
     public static let shared = NodeStore()
     private init() {}
@@ -206,16 +236,44 @@ public final class NodeStore: ObservableObject {
         deliveryTask = nil
         transport?.stop()
         transport = nil
+        backgroundRuntime.deactivateCallAudio()
+        backgroundRuntime.deactivateKeepAlive()
+        incomingCall = nil
+        activeCall = nil
         isRunning = false
     }
 
     public func onAppBecameActive() {
         Task { @MainActor in
+            currentScenePhase = .active
+            if activeCall == nil {
+                backgroundRuntime.deactivateKeepAlive()
+            }
             if isRunning {
                 processDeliveryQueue()
+                broadcastSyncDigest()
             } else {
                 await start()
             }
+        }
+    }
+
+    public func handleScenePhase(_ phase: ScenePhase) {
+        currentScenePhase = phase
+        switch phase {
+        case .active:
+            onAppBecameActive()
+        case .background:
+            if activeCall != nil {
+                backgroundRuntime.activateCallAudio()
+            } else {
+                backgroundRuntime.activateKeepAlive()
+            }
+            processDeliveryQueue()
+        case .inactive:
+            break
+        @unknown default:
+            break
         }
     }
 
@@ -401,6 +459,109 @@ public final class NodeStore: ObservableObject {
         }
     }
 
+    // MARK: - Calls
+
+    public func startVoiceCall(to peer: PeerEntry) {
+        let callID = UUID()
+        activeCall = ActiveCallSession(
+            id: callID,
+            peerID: peer.peerID.value,
+            peerNickname: peer.nickname,
+            media: .voice,
+            phase: .ringing,
+            startedAt: nil
+        )
+        let invite = TransportMessage(
+            kind: .callInvite,
+            senderPeerID: myPeerIDValue,
+            senderNickname: nickname,
+            receiverPeerID: peer.peerID.value,
+            callID: callID,
+            callMediaType: CallMediaType.voice.rawValue
+        )
+        do {
+            if let transport, transport.isPeerConnected(peer.peerID) {
+                try transport.send(message: invite, to: peer.peerID)
+            } else if let transport {
+                try transport.sendToConnectedPeers(message: invite, excludingPeerIDs: [myPeerIDValue])
+            }
+        } catch {
+            errorMessage = "Не удалось начать звонок: \(error.localizedDescription)"
+            activeCall = nil
+        }
+    }
+
+    public func acceptIncomingCall() {
+        guard let incoming = incomingCall else { return }
+        incomingCall = nil
+        activeCall = ActiveCallSession(
+            id: incoming.id,
+            peerID: incoming.peerID,
+            peerNickname: incoming.peerNickname,
+            media: incoming.media,
+            phase: .connecting,
+            startedAt: nil
+        )
+        backgroundRuntime.activateCallAudio()
+
+        Task { @MainActor in
+            do {
+                try await callEngine.startCall(with: PeerID(incoming.peerID), media: incoming.media)
+                activeCall?.phase = .active
+                activeCall?.startedAt = Date()
+            } catch {
+                errorMessage = "Ошибка звонка: \(error.localizedDescription)"
+                activeCall = nil
+                backgroundRuntime.deactivateCallAudio()
+            }
+        }
+
+        let accept = TransportMessage(
+            kind: .callAccept,
+            senderPeerID: myPeerIDValue,
+            senderNickname: nickname,
+            receiverPeerID: incoming.peerID,
+            callID: incoming.id,
+            callMediaType: incoming.media.rawValue
+        )
+        try? transport?.send(message: accept, to: PeerID(incoming.peerID))
+    }
+
+    public func declineIncomingCall() {
+        guard let incoming = incomingCall else { return }
+        let decline = TransportMessage(
+            kind: .callDecline,
+            senderPeerID: myPeerIDValue,
+            senderNickname: nickname,
+            receiverPeerID: incoming.peerID,
+            callID: incoming.id,
+            callMediaType: incoming.media.rawValue
+        )
+        try? transport?.send(message: decline, to: PeerID(incoming.peerID))
+        incomingCall = nil
+    }
+
+    public func endCurrentCall() {
+        guard let activeCall else { return }
+        let end = TransportMessage(
+            kind: .callEnd,
+            senderPeerID: myPeerIDValue,
+            senderNickname: nickname,
+            receiverPeerID: activeCall.peerID,
+            callID: activeCall.id,
+            callMediaType: activeCall.media.rawValue
+        )
+        try? transport?.send(message: end, to: PeerID(activeCall.peerID))
+        Task { @MainActor in
+            await callEngine.endCall()
+            self.activeCall?.phase = .ended
+            self.backgroundRuntime.deactivateCallAudio()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.activeCall = nil
+            }
+        }
+    }
+
     // MARK: - Trust
 
     public func verifyPeer(peerID: String, isVerified: Bool) {
@@ -439,6 +600,29 @@ public final class NodeStore: ObservableObject {
             return
         case .readReceipt:
             handleReadReceipt(packet)
+            return
+        case .callInvite:
+            if packet.receiverPeerID == myPeerIDValue {
+                handleIncomingCallInvite(packet, fromPeerID: fromPeerID)
+                return
+            }
+        case .callAccept:
+            if packet.receiverPeerID == myPeerIDValue {
+                handleIncomingCallAccept(packet, fromPeerID: fromPeerID)
+                return
+            }
+        case .callDecline:
+            if packet.receiverPeerID == myPeerIDValue {
+                handleIncomingCallDecline(packet, fromPeerID: fromPeerID)
+                return
+            }
+        case .callEnd:
+            if packet.receiverPeerID == myPeerIDValue {
+                handleIncomingCallEnd(packet, fromPeerID: fromPeerID)
+                return
+            }
+        case .syncDigest:
+            processDeliveryQueue()
             return
         default:
             break
@@ -517,10 +701,9 @@ public final class NodeStore: ObservableObject {
         case .fileChunk:
             handleIncomingFileChunk(packet: packet, fromPeerID: fromPeerID)
 
+        case .ack, .readReceipt, .callInvite, .callAccept, .callDecline, .callEnd:
+            break
         case .syncDigest:
-            processDeliveryQueue()
-
-        case .ack, .readReceipt:
             break
         }
     }
@@ -667,7 +850,9 @@ public final class NodeStore: ObservableObject {
             fileChunkIndex: packet.fileChunkIndex,
             fileTotalChunks: packet.fileTotalChunks,
             fileChunkData: packet.fileChunkData,
-            fileChecksum: packet.fileChecksum
+            fileChecksum: packet.fileChecksum,
+            callID: packet.callID,
+            callMediaType: packet.callMediaType
         )
         let excluded = Set(path + [fromPeerID.value])
         try? transport.sendToConnectedPeers(message: relayPacket, excludingPeerIDs: excluded)
@@ -685,6 +870,81 @@ public final class NodeStore: ObservableObject {
         try? transport.send(message: ack, to: peerID)
     }
 
+    private func handleIncomingCallInvite(_ packet: TransportMessage, fromPeerID: PeerID) {
+        guard packet.receiverPeerID == myPeerIDValue, let callID = packet.callID else { return }
+        let media = CallMediaType(rawValue: packet.callMediaType ?? "voice") ?? .voice
+        incomingCall = IncomingCallOffer(
+            id: callID,
+            peerID: fromPeerID.value,
+            peerNickname: packet.senderNickname,
+            media: media,
+            timestamp: Date()
+        )
+        if currentScenePhase != .active {
+            notifyIncomingMessage(from: packet.senderNickname, text: "Входящий \(media.rawValue) звонок")
+        }
+    }
+
+    private func handleIncomingCallAccept(_ packet: TransportMessage, fromPeerID: PeerID) {
+        guard let callID = packet.callID,
+              activeCall?.id == callID,
+              activeCall?.peerID == fromPeerID.value else { return }
+
+        activeCall?.phase = .connecting
+        backgroundRuntime.activateCallAudio()
+        Task { @MainActor in
+            do {
+                let media = activeCall?.media ?? .voice
+                try await callEngine.startCall(with: PeerID(fromPeerID.value), media: media)
+                activeCall?.phase = .active
+                activeCall?.startedAt = Date()
+            } catch {
+                errorMessage = "Ошибка звонка: \(error.localizedDescription)"
+                activeCall = nil
+                backgroundRuntime.deactivateCallAudio()
+            }
+        }
+    }
+
+    private func handleIncomingCallDecline(_ packet: TransportMessage, fromPeerID: PeerID) {
+        guard let callID = packet.callID,
+              activeCall?.id == callID,
+              activeCall?.peerID == fromPeerID.value else { return }
+        activeCall?.phase = .ended
+        backgroundRuntime.deactivateCallAudio()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.activeCall = nil
+        }
+    }
+
+    private func handleIncomingCallEnd(_ packet: TransportMessage, fromPeerID: PeerID) {
+        if let incoming = incomingCall, incoming.id == packet.callID, incoming.peerID == fromPeerID.value {
+            incomingCall = nil
+        }
+        guard let callID = packet.callID,
+              activeCall?.id == callID,
+              activeCall?.peerID == fromPeerID.value else { return }
+        Task { @MainActor in
+            await callEngine.endCall()
+            activeCall?.phase = .ended
+            backgroundRuntime.deactivateCallAudio()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.activeCall = nil
+            }
+        }
+    }
+
+    private func broadcastSyncDigest() {
+        guard let transport else { return }
+        let heartbeat = TransportMessage(
+            kind: .syncDigest,
+            senderPeerID: myPeerIDValue,
+            senderNickname: nickname,
+            receiverPeerID: "*"
+        )
+        try? transport.sendToConnectedPeers(message: heartbeat, excludingPeerIDs: [])
+    }
+
     // MARK: - Delivery queue
 
     private func startDeliveryLoop() {
@@ -699,11 +959,19 @@ public final class NodeStore: ObservableObject {
 
     private func processDeliveryQueue() {
         guard let storageEngine else { return }
+        maybeSendHeartbeat()
         let now = Date()
         let due = (try? storageEngine.fetchDueOutgoingMessages(now: now, limit: 64)) ?? []
         for record in due where record.status != .delivered && record.status != .read {
             attemptDelivery(record)
         }
+    }
+
+    private func maybeSendHeartbeat() {
+        let now = Date()
+        guard now.timeIntervalSince(lastHeartbeatAt) >= 12 else { return }
+        lastHeartbeatAt = now
+        broadcastSyncDigest()
     }
 
     private func attemptDelivery(_ record: StoredMessageRecord) {

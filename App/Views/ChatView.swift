@@ -13,6 +13,9 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let active = store.activeCall, active.peerID == peer.peerID.value {
+                callBanner(active)
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
@@ -46,6 +49,13 @@ struct ChatView: View {
         .navigationTitle(peer.nickname)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    store.startVoiceCall(to: peer)
+                } label: {
+                    Image(systemName: "phone.fill")
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 4) {
                     Circle()
@@ -68,6 +78,30 @@ struct ChatView: View {
             guard case .success(let urls) = result, let url = urls.first else { return }
             store.sendFile(at: url, to: peer)
         }
+    }
+
+    @ViewBuilder
+    private func callBanner(_ call: ActiveCallSession) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Звонок: \(phaseText(call.phase))")
+                    .font(.subheadline)
+                    .bold()
+                if let startedAt = call.startedAt {
+                    Text("Начат \(timeString(startedAt))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Button("Завершить", role: .destructive) {
+                store.endCurrentCall()
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemBackground))
     }
 
     private var emptyConversation: some View {
@@ -168,6 +202,15 @@ struct MessageBubble: View {
         let f = DateFormatter()
         f.timeStyle = .short
         return f.string(from: date)
+    }
+
+    private func phaseText(_ phase: ActiveCallSession.Phase) -> String {
+        switch phase {
+        case .ringing: return "ожидание ответа"
+        case .connecting: return "подключение"
+        case .active: return "активен"
+        case .ended: return "завершён"
+        }
     }
 
     private func statusText(_ status: OutboxStatus) -> String {

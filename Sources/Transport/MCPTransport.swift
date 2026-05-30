@@ -11,6 +11,10 @@ public enum TransportPacketKind: String, Codable, Sendable {
     case relay
     case fileMeta
     case fileChunk
+    case callInvite
+    case callAccept
+    case callDecline
+    case callEnd
 }
 
 public struct TransportMessage: Codable, Sendable {
@@ -39,6 +43,8 @@ public struct TransportMessage: Codable, Sendable {
     public let fileTotalChunks: Int?
     public let fileChunkData: Data?
     public let fileChecksum: Data?
+    public let callID: UUID?
+    public let callMediaType: String?
 
     public init(
         id: UUID = UUID(),
@@ -62,7 +68,9 @@ public struct TransportMessage: Codable, Sendable {
         fileChunkIndex: Int? = nil,
         fileTotalChunks: Int? = nil,
         fileChunkData: Data? = nil,
-        fileChecksum: Data? = nil
+        fileChecksum: Data? = nil,
+        callID: UUID? = nil,
+        callMediaType: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -86,6 +94,8 @@ public struct TransportMessage: Codable, Sendable {
         self.fileTotalChunks = fileTotalChunks
         self.fileChunkData = fileChunkData
         self.fileChecksum = fileChecksum
+        self.callID = callID
+        self.callMediaType = callMediaType
     }
 }
 
@@ -285,6 +295,10 @@ public enum TransportPacketKind: String, Codable, Sendable {
     case relay
     case fileMeta
     case fileChunk
+    case callInvite
+    case callAccept
+    case callDecline
+    case callEnd
 }
 
 public struct TransportMessage: Codable, Sendable {
@@ -310,6 +324,8 @@ public struct TransportMessage: Codable, Sendable {
     public let fileTotalChunks: Int?
     public let fileChunkData: Data?
     public let fileChecksum: Data?
+    public let callID: UUID?
+    public let callMediaType: String?
 
     public init(
         id: UUID = UUID(),
@@ -333,7 +349,9 @@ public struct TransportMessage: Codable, Sendable {
         fileChunkIndex: Int? = nil,
         fileTotalChunks: Int? = nil,
         fileChunkData: Data? = nil,
-        fileChecksum: Data? = nil
+        fileChecksum: Data? = nil,
+        callID: UUID? = nil,
+        callMediaType: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -357,6 +375,8 @@ public struct TransportMessage: Codable, Sendable {
         self.fileTotalChunks = fileTotalChunks
         self.fileChunkData = fileChunkData
         self.fileChecksum = fileChecksum
+        self.callID = callID
+        self.callMediaType = callMediaType
     }
 }
 
