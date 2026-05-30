@@ -72,13 +72,19 @@ final class KeyStore {
         #if canImport(Security)
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
+            kSecAttrService: "MeshMessenger",
             kSecAttrAccount: tag,
             kSecValueData: data,
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
 
         SecItemDelete(query as CFDictionary)
-        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
+        let status = SecItemAdd(query as CFDictionary, nil)
+        if status == errSecSuccess {
+            return true
+        }
+        UserDefaults.standard.set(data, forKey: tag)
+        return true
         #else
         UserDefaults.standard.set(data, forKey: tag)
         return true
@@ -89,16 +95,17 @@ final class KeyStore {
         #if canImport(Security)
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
+            kSecAttrService: "MeshMessenger",
             kSecAttrAccount: tag,
             kSecReturnData: kCFBooleanTrue as Any,
             kSecMatchLimit: kSecMatchLimitOne
         ]
 
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else {
-            return nil
+        if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess {
+            return item as? Data
         }
-        return item as? Data
+        return UserDefaults.standard.data(forKey: tag)
         #else
         return UserDefaults.standard.data(forKey: tag)
         #endif

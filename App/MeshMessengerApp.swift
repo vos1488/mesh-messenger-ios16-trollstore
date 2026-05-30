@@ -10,8 +10,14 @@ struct MeshMessengerApp: App {
 }
 
 struct HomeView: View {
-    @State private var peerIDText = "Initializing..."
-    @State private var statusText = "Node is offline"
+    enum LaunchState {
+        case idle
+        case loading
+        case ready(peerURI: String)
+        case failed(message: String)
+    }
+
+    @State private var launchState: LaunchState = .idle
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -19,29 +25,54 @@ struct HomeView: View {
                 .font(.largeTitle)
                 .bold()
 
-            Text("PeerID")
-                .font(.headline)
-            Text(peerIDText)
-                .font(.footnote)
-                .textSelection(.enabled)
+            switch launchState {
+            case .idle, .loading:
+                ProgressView()
+                Text("Запуск узла…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
 
-            Text(statusText)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            case .ready(let peerURI):
+                Text("PeerID")
+                    .font(.headline)
+                Text(peerURI)
+                    .font(.footnote)
+                    .textSelection(.enabled)
+                Text("Готов к mesh discovery")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+            case .failed(let message):
+                Text("Не удалось инициализировать узел")
+                    .font(.headline)
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("Повторить") {
+                    Task { await initializeIdentity() }
+                }
+            }
         }
         .padding()
-        .onAppear {
-            do {
-                let identity = try IdentityEngine(
+        .task {
+            if case .idle = launchState {
+                await initializeIdentity()
+            }
+        }
+    }
+
+    private func initializeIdentity() async {
+        launchState = .loading
+        do {
+            let identity = try await Task.detached(priority: .userInitiated) {
+                try IdentityEngine(
                     nickname: "iOS Node",
                     capabilities: [.chat, .voice, .video, .relay, .files]
                 )
-                peerIDText = identity.identity.profile.peerID.uri
-                statusText = "Ready for mesh discovery"
-            } catch {
-                peerIDText = "Identity init failed"
-                statusText = error.localizedDescription
-            }
+            }.value
+            launchState = .ready(peerURI: identity.identity.profile.peerID.uri)
+        } catch {
+            launchState = .failed(message: error.localizedDescription)
         }
     }
 }
