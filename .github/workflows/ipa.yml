@@ -18,6 +18,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -52,6 +57,22 @@ jobs:
         with:
           name: MeshMessenger-TrollStore-unsigned-${{ github.sha }}
           path: MeshMessenger-TrollStore-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build Web Bridge binaries
+        run: |
+          mkdir -p web-artifacts
+          cd web-go
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o ../web-artifacts/MeshMessenger-WebBridge-linux-amd64 .
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o ../web-artifacts/MeshMessenger-WebBridge-windows-amd64.exe .
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o ../web-artifacts/MeshMessenger-WebBridge-darwin-arm64 .
+
+      - name: Upload Web Bridge binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: MeshMessenger-WebBridge-${{ github.sha }}
+          path: web-artifacts/*
           if-no-files-found: error
           retention-days: 30
 

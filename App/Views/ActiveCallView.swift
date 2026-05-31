@@ -4,8 +4,6 @@ struct ActiveCallView: View {
     @EnvironmentObject var store: NodeStore
     @State private var elapsed: Int = 0
     @State private var timer: Timer?
-    @State private var isMuted = false
-    @State private var isSpeaker = false
 
     private var call: ActiveCallSession? { store.activeCall }
 
@@ -39,11 +37,11 @@ struct ActiveCallView: View {
                 // Controls
                 HStack(spacing: 50) {
                     callButton(
-                        systemImage: isMuted ? "mic.slash.fill" : "mic.fill",
-                        label: isMuted ? "Откл. микр." : "Микрофон",
-                        color: isMuted ? .red.opacity(0.8) : .white.opacity(0.2)
+                        systemImage: store.callMicrophoneMuted ? "mic.slash.fill" : "mic.fill",
+                        label: store.callMicrophoneMuted ? "Откл. микр." : "Микрофон",
+                        color: store.callMicrophoneMuted ? .red.opacity(0.8) : .white.opacity(0.2)
                     ) {
-                        isMuted.toggle()
+                        store.toggleCallMicrophoneMuted()
                     }
 
                     // End call
@@ -57,11 +55,11 @@ struct ActiveCallView: View {
                     }
 
                     callButton(
-                        systemImage: isSpeaker ? "speaker.wave.3.fill" : "speaker.fill",
+                        systemImage: store.callSpeakerEnabled ? "speaker.wave.3.fill" : "speaker.slash.fill",
                         label: "Громкость",
-                        color: isSpeaker ? .blue.opacity(0.8) : .white.opacity(0.2)
+                        color: store.callSpeakerEnabled ? .blue.opacity(0.8) : .white.opacity(0.2)
                     ) {
-                        isSpeaker.toggle()
+                        store.toggleCallSpeakerEnabled()
                     }
                 }
                 .padding(.bottom, 60)

@@ -59,3 +59,42 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+  web-bridge-binaries:
+    name: Web Bridge (${{ matrix.goos }}-${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            output: MeshMessenger-WebBridge-linux-amd64
+          - goos: windows
+            goarch: amd64
+            output: MeshMessenger-WebBridge-windows-amd64.exe
+          - goos: darwin
+            goarch: arm64
+            output: MeshMessenger-WebBridge-darwin-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+
+      - name: Build web bridge binary
+        run: |
+          mkdir -p web-artifacts
+          cd web-go
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags "-s -w" -o ../web-artifacts/${{ matrix.output }} .
+
+      - name: Upload web bridge artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.output }}-${{ github.sha }}
+          path: web-artifacts/${{ matrix.output }}
+          if-no-files-found: error
+          retention-days: 30
+

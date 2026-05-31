@@ -162,6 +162,8 @@ public final class NodeStore: ObservableObject {
     @Published public var webSessionID: String?
     @Published public var webSessionStatusText: String = "Отключено"
     @Published public var webSessionAuthorized: Bool = false
+    @Published public var callMicrophoneMuted: Bool = false
+    @Published public var callSpeakerEnabled: Bool = true
 
     private var transport: HybridTransport?
     private var storageEngine: StorageEngine?
@@ -174,6 +176,7 @@ public final class NodeStore: ObservableObject {
     private var deliveryTask: Task<Void, Never>?
     private var outgoingCallInviteTask: Task<Void, Never>?
     private var outgoingCallTimeoutTask: Task<Void, Never>?
+    private var callActivationInProgress = false
     private var myPeerIDValue: String = ""
     private var knownMessageIDs: Set<UUID> = []
     private var incomingFileNames: [UUID: String] = [:]
@@ -241,9 +244,23 @@ public final class NodeStore: ObservableObject {
                 }
             }
             t.onStreamReceived = { [weak self] stream, peerID, name in
-                guard name.hasPrefix("call-audio") else { return }
+                guard name.hasPrefix("call-audio") else {
+                    stream.close()
+                    return
+                }
                 Task { @MainActor [weak self] in
-                    self?.callEngine.handleIncomingAudioStream(stream, from: peerID)
+                    guard let self else {
+                        stream.close()
+                        return
+                    }
+                    guard let activeCall = self.activeCall,
+                          (activeCall.phase == .connecting || activeCall.phase == .active),
+                          activeCall.peerID == peerID.value else {
+                        self.appendDebug("call", "drop unexpected stream from \(peerID.value.prefix(8))")
+                        stream.close()
+                        return
+                    }
+                    self.callEngine.handleIncomingAudioStream(stream, from: peerID)
                 }
             }
 
@@ -265,12 +282,17 @@ public final class NodeStore: ObservableObject {
         deliveryTask?.cancel()
         deliveryTask = nil
         cancelOutgoingCallTimers()
+        callActivationInProgress = false
         disconnectWebSession()
         transport?.stop()
         transport = nil
         callEngine.weakTransport = nil
+        Task { @MainActor in
+            await callEngine.endCall()
+        }
         backgroundRuntime.deactivateCallAudio()
         backgroundRuntime.deactivateKeepAlive()
+        resetCallControls()
         incomingCall = nil
         activeCall = nil
         isRunning = false
@@ -499,7 +521,13 @@ public final class NodeStore: ObservableObject {
     // MARK: - Calls
 
     public func startVoiceCall(to peer: PeerEntry) {
+        if let current = activeCall, current.phase != .ended {
+            errorMessage = "Уже есть активный звонок"
+            appendDebug("call", "start ignored: active call \(current.id.uuidString.prefix(8))")
+            return
+        }
         let callID = UUID()
+        resetCallControls()
         cancelOutgoingCallTimers()
         appendDebug("call", "invite \(callID.uuidString.prefix(8)) -> \(peer.peerID.value.prefix(8))")
         activeCall = ActiveCallSession(
@@ -529,6 +557,14 @@ public final class NodeStore: ObservableObject {
     public func acceptIncomingCall(_ offer: IncomingCallOffer? = nil) {
         let incoming = offer ?? incomingCall
         guard let incoming else { return }
+        if let current = activeCall, current.id == incoming.id, current.phase != .ended {
+            appendDebug("call", "accept ignored: call already in phase \(current.phase.rawValue)")
+            return
+        }
+        guard !callActivationInProgress else {
+            appendDebug("call", "accept ignored: activation in progress")
+            return
+        }
         incomingCall = nil
         appendDebug("call", "accept \(incoming.id.uuidString.prefix(8)) from \(incoming.peerID.prefix(8))")
 
@@ -556,18 +592,24 @@ public final class NodeStore: ObservableObject {
             startedAt: nil
         )
         callEngine.weakTransport = transport?.streamTransport
+        callActivationInProgress = true
 
         Task { @MainActor in
+            defer { self.callActivationInProgress = false }
             do {
                 // Activate audio session before starting engine (required for mic input)
                 backgroundRuntime.activateCallAudio()
                 try await callEngine.startCall(with: PeerID(incoming.peerID), media: incoming.media)
+                callEngine.setMicrophoneMuted(callMicrophoneMuted)
+                _ = callEngine.setSpeakerEnabled(callSpeakerEnabled)
                 activeCall?.phase = .active
                 activeCall?.startedAt = Date()
             } catch {
+                await callEngine.endCall()
                 errorMessage = "Ошибка звонка: \(error.localizedDescription)"
                 activeCall = nil
                 backgroundRuntime.deactivateCallAudio()
+                resetCallControls()
                 appendDebug("error", "call start failed: \(error.localizedDescription)")
             }
         }
@@ -591,6 +633,7 @@ public final class NodeStore: ObservableObject {
 
     public func endCurrentCall() {
         guard let activeCall else { return }
+        callActivationInProgress = false
         cancelOutgoingCallTimers()
         appendDebug("call", "end \(activeCall.id.uuidString.prefix(8))")
         let end = TransportMessage(
@@ -607,6 +650,7 @@ public final class NodeStore: ObservableObject {
             await callEngine.endCall()
             self.activeCall?.phase = .ended
             self.backgroundRuntime.deactivateCallAudio()
+            self.resetCallControls()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 self?.activeCall = nil
             }
@@ -666,6 +710,28 @@ public final class NodeStore: ObservableObject {
 
     public func unreadCount(for peer: PeerEntry) -> Int {
         (messages[peer.peerID.value] ?? []).filter { !$0.isMe && !$0.isRead }.count
+    }
+
+    public func toggleCallMicrophoneMuted() {
+        setCallMicrophoneMuted(!callMicrophoneMuted)
+    }
+
+    public func setCallMicrophoneMuted(_ muted: Bool) {
+        callMicrophoneMuted = muted
+        callEngine.setMicrophoneMuted(muted)
+    }
+
+    public func toggleCallSpeakerEnabled() {
+        setCallSpeakerEnabled(!callSpeakerEnabled)
+    }
+
+    public func setCallSpeakerEnabled(_ enabled: Bool) {
+        if callEngine.setSpeakerEnabled(enabled) {
+            callSpeakerEnabled = enabled
+            return
+        }
+        errorMessage = "Не удалось переключить аудиовыход"
+        appendDebug("error", "speaker switch failed")
     }
 
     public func connectedCount() -> Int {
@@ -1008,24 +1074,37 @@ public final class NodeStore: ObservableObject {
     private func handleIncomingCallAccept(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
         guard let callID = packet.callID,
               activeCall?.id == callID else { return }
-        guard activeCall?.phase != .active else { return }
+        guard activeCall?.phase == .ringing else {
+            appendDebug("call", "accept ignored in phase \(activeCall?.phase.rawValue ?? "nil")")
+            return
+        }
+        guard !callActivationInProgress else {
+            appendDebug("call", "accept duplicate ignored: activation in progress")
+            return
+        }
 
         cancelOutgoingCallTimers()
         activeCall?.phase = .connecting
         appendDebug("call", "accepted by \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))")
         callEngine.weakTransport = transport?.streamTransport
+        callActivationInProgress = true
 
         Task { @MainActor in
+            defer { self.callActivationInProgress = false }
             do {
                 backgroundRuntime.activateCallAudio()
                 let media = activeCall?.media ?? .voice
                 try await callEngine.startCall(with: PeerID(fromPeerID.value), media: media)
+                callEngine.setMicrophoneMuted(callMicrophoneMuted)
+                _ = callEngine.setSpeakerEnabled(callSpeakerEnabled)
                 activeCall?.phase = .active
                 activeCall?.startedAt = Date()
             } catch {
+                await callEngine.endCall()
                 errorMessage = "Ошибка звонка: \(error.localizedDescription)"
                 activeCall = nil
                 backgroundRuntime.deactivateCallAudio()
+                resetCallControls()
                 appendDebug("error", "caller start failed: \(error.localizedDescription)")
             }
         }
@@ -1034,12 +1113,17 @@ public final class NodeStore: ObservableObject {
     private func handleIncomingCallDecline(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
         guard let callID = packet.callID,
               activeCall?.id == callID else { return }
+        callActivationInProgress = false
         cancelOutgoingCallTimers()
-        activeCall?.phase = .ended
-        appendDebug("call", "declined by \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))")
-        backgroundRuntime.deactivateCallAudio()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            self?.activeCall = nil
+        Task { @MainActor in
+            await callEngine.endCall()
+            activeCall?.phase = .ended
+            appendDebug("call", "declined by \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))")
+            backgroundRuntime.deactivateCallAudio()
+            resetCallControls()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.activeCall = nil
+            }
         }
     }
 
@@ -1049,12 +1133,14 @@ public final class NodeStore: ObservableObject {
         }
         guard let callID = packet.callID,
               activeCall?.id == callID else { return }
+        callActivationInProgress = false
         cancelOutgoingCallTimers()
         Task { @MainActor in
             await callEngine.endCall()
             activeCall?.phase = .ended
             appendDebug("call", "ended by remote \(fromPeerID.value.prefix(8)) hop \(relayHopPeerID.value.prefix(8))")
             backgroundRuntime.deactivateCallAudio()
+            resetCallControls()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 self?.activeCall = nil
             }
@@ -1513,6 +1599,13 @@ public final class NodeStore: ObservableObject {
             .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == ";" })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    private func resetCallControls() {
+        callMicrophoneMuted = false
+        callSpeakerEnabled = true
+        callEngine.setMicrophoneMuted(false)
+        _ = callEngine.setSpeakerEnabled(true)
     }
 
     private func parseWebPairPayload(from raw: String) -> WebPairingPayload? {

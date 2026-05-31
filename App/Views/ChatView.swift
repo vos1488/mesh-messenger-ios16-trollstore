@@ -7,6 +7,10 @@ struct ChatView: View {
     @State private var inputText = ""
     @State private var isShowingFileImporter = false
 
+    private var currentPeer: PeerEntry {
+        store.peers.first(where: { $0.peerID.value == peer.peerID.value }) ?? peer
+    }
+
     private var messages: [ChatMessage] {
         store.messages[peer.peerID.value] ?? []
     }
@@ -46,12 +50,12 @@ struct ChatView: View {
             Divider()
             inputBar
         }
-        .navigationTitle(peer.nickname)
+        .navigationTitle(currentPeer.nickname)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
-                    store.startVoiceCall(to: peer)
+                    store.startVoiceCall(to: currentPeer)
                 } label: {
                     Image(systemName: "phone.fill")
                 }
@@ -59,9 +63,9 @@ struct ChatView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(peer.isConnected ? .green : .gray)
+                        .fill(currentPeer.isConnected ? .green : .gray)
                         .frame(width: 8, height: 8)
-                    Text(peer.isConnected ? "Онлайн" : "Офлайн")
+                    Text(currentPeer.isConnected ? "Онлайн" : "Офлайн")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -76,7 +80,7 @@ struct ChatView: View {
             allowsMultipleSelection: false
         ) { result in
             guard case .success(let urls) = result, let url = urls.first else { return }
-            store.sendFile(at: url, to: peer)
+            store.sendFile(at: url, to: currentPeer)
         }
     }
 
@@ -152,7 +156,7 @@ struct ChatView: View {
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        store.send(text: text, to: peer)
+        store.send(text: text, to: currentPeer)
         inputText = ""
     }
 

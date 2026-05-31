@@ -4,6 +4,10 @@ import Foundation
 import AVFoundation
 #endif
 
+#if canImport(UIKit)
+import UIKit
+#endif
+
 public enum CallMediaType: String, Sendable {
     case voice
     case video
@@ -14,6 +18,10 @@ public enum CallState: String, Sendable {
     case connecting
     case active
     case ended
+}
+
+public enum CallEngineError: Error {
+    case transportUnavailable
 }
 
 public protocol CallEngine {
@@ -46,25 +54,50 @@ public final class MCStreamCallEngine: CallEngine {
     private var streamReadTimer: Timer?
     private var outboundFrames: [Data] = []
     private var outboundFrameOffset: Int = 0
+    private var microphoneMuted = false
+    private var speakerEnabled = true
+    private var activePeerID: PeerID?
+    private var pendingInputPeerID: PeerID?
+    private let maxFramePayloadBytes = 4096
 
     public init() {}
+
+    public func setMicrophoneMuted(_ muted: Bool) {
+        microphoneMuted = muted
+    }
+
+    @discardableResult
+    public func setSpeakerEnabled(_ enabled: Bool) -> Bool {
+        speakerEnabled = enabled
+        #if canImport(AVFoundation) && canImport(UIKit)
+        do {
+            try AVAudioSession.sharedInstance().overrideOutputAudioPort(enabled ? .speaker : .none)
+            return true
+        } catch {
+            speakerEnabled = !enabled
+            return false
+        }
+        #else
+        return false
+        #endif
+    }
+
+    public func isMicrophoneMuted() -> Bool { microphoneMuted }
+    public func isSpeakerEnabled() -> Bool { speakerEnabled }
 
     public func startCall(with peerID: PeerID, media: CallMediaType) async throws {
         state = .connecting
         await MainActor.run { [weak self] in
             self?.teardownAudio()
         }
+        activePeerID = peerID
 
         // Open outgoing MCSession stream to remote peer
-        var outStream: OutputStream?
-        if let transport = weakTransport {
-            outStream = try? transport.startAudioStream(to: peerID, name: "call-audio")
-            if let s = outStream {
-                outputStream = s
-                s.schedule(in: .main, forMode: .default)
-                s.open()
-            }
-        }
+        guard let transport = weakTransport else { throw CallEngineError.transportUnavailable }
+        let outStream = try transport.startAudioStream(to: peerID, name: "call-audio")
+        outputStream = outStream
+        outStream.schedule(in: .main, forMode: .common)
+        outStream.open()
 
         // Set up AVAudioEngine on main thread
         await MainActor.run { [weak self] in
@@ -73,8 +106,14 @@ public final class MCStreamCallEngine: CallEngine {
 
         // If the remote side already opened a stream (race-free pending queue)
         if let pending = pendingInputStream {
+            let pendingPeer = pendingInputPeerID
             pendingInputStream = nil
-            startReceiving(stream: pending)
+            pendingInputPeerID = nil
+            if let pendingPeer, pendingPeer.value != peerID.value {
+                pending.close()
+            } else {
+                startReceiving(stream: pending, from: pendingPeer ?? peerID)
+            }
         }
 
         state = .active
@@ -82,14 +121,20 @@ public final class MCStreamCallEngine: CallEngine {
 
     // Called from NodeStore when the remote peer opens an audio stream to us
     public func handleIncomingAudioStream(_ stream: InputStream, from peerID: PeerID) {
+        if let expected = activePeerID, expected.value != peerID.value {
+            stream.close()
+            return
+        }
 #if canImport(AVFoundation)
         if let engine = audioEngine, engine.isRunning {
-            startReceiving(stream: stream)
+            startReceiving(stream: stream, from: peerID)
         } else {
             pendingInputStream = stream
+            pendingInputPeerID = peerID
         }
 #else
         pendingInputStream = stream
+        pendingInputPeerID = peerID
 #endif
     }
 
@@ -145,19 +190,22 @@ public final class MCStreamCallEngine: CallEngine {
 #endif
     }
 
-    private func startReceiving(stream: InputStream) {
+    private func startReceiving(stream: InputStream, from peerID: PeerID) {
+        activePeerID = peerID
         inputStream?.close()
         inputStream = stream
 #if canImport(AVFoundation)
         receiveAccumulator.removeAll(keepingCapacity: true)
 #endif
-        stream.schedule(in: .main, forMode: .default)
+        stream.schedule(in: .main, forMode: .common)
         stream.open()
 
         streamReadTimer?.invalidate()
-        streamReadTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
             self?.readAudioFromStream()
         }
+        streamReadTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func readAudioFromStream() {
@@ -176,8 +224,8 @@ public final class MCStreamCallEngine: CallEngine {
 
         while receiveAccumulator.count >= 2 {
             let payloadSize = (Int(receiveAccumulator[0]) << 8) | Int(receiveAccumulator[1])
-            guard payloadSize > 0 else {
-                receiveAccumulator.removeFirst(min(2, receiveAccumulator.count))
+            guard payloadSize > 0, payloadSize <= maxFramePayloadBytes else {
+                receiveAccumulator.removeFirst(1)
                 continue
             }
             let totalFrameSize = 2 + payloadSize
@@ -192,6 +240,7 @@ public final class MCStreamCallEngine: CallEngine {
 
 #if canImport(AVFoundation)
     private func encodeAndSendCapturedAudio(_ inputBuffer: AVAudioPCMBuffer, to stream: OutputStream) {
+        guard !microphoneMuted else { return }
         guard let converter = captureConverter, let callWireFormat = wireFormat else { return }
 
         let ratio = callWireFormat.sampleRate / max(1, inputBuffer.format.sampleRate)
@@ -348,6 +397,10 @@ public final class MCStreamCallEngine: CallEngine {
         outputStream = nil
         inputStream = nil
         pendingInputStream = nil
+        pendingInputPeerID = nil
+        activePeerID = nil
+        microphoneMuted = false
+        speakerEnabled = true
     }
 }
 
