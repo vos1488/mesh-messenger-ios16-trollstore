@@ -117,6 +117,14 @@ struct UpdateSettingsSection: View {
                     Text(latest)
                         .foregroundStyle(checker.isUpdateAvailable ? .orange : .green)
                 }
+
+                HStack {
+                    Label("Статус", systemImage: checker.isUpdateAvailable ? "arrow.down.circle" : "checkmark.circle")
+                    Spacer()
+                    Text(checker.isUpdateAvailable ? "Доступно обновление" : "Установлена актуальная версия")
+                        .font(.caption)
+                        .foregroundStyle(checker.isUpdateAvailable ? .orange : .green)
+                }
             }
 
             if let checkedAt = checker.lastCheckedAt {
@@ -190,7 +198,7 @@ struct UpdateSettingsSection: View {
             }
             Button("Отмена", role: .cancel) {}
         } message: {
-            Text("Токен нужен для проверки обновлений из приватного репозитория.\nСоздайте fine-grained PAT с правом Contents: Read.")
+            Text("Для публичного репозитория токен не нужен.\nДобавляйте токен только если используете приватный форк (fine-grained PAT с правом Contents: Read).")
         }
     }
 }
