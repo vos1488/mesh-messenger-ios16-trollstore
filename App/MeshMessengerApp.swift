@@ -78,6 +78,7 @@ struct RootView: View {
             ActiveCallView()
                 .environmentObject(store)
         }
+        .whatsNewOnUpdate()
     }
 }
 
