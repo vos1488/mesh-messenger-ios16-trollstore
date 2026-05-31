@@ -20,6 +20,10 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>apple-magnifier</string>
+	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Bluetooth is required for peer discovery in mesh mode.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>

@@ -121,6 +121,8 @@ struct SettingsView: View {
                     LabeledContent("Шифрование", value: "AES-256-GCM + Ed25519")
                     LabeledContent("DHT", value: "Kademlia")
                 }
+
+                UpdateSettingsSection()
             }
             .navigationTitle("Настройки")
             .navigationBarTitleDisplayMode(.inline)

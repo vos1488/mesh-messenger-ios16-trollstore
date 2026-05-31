@@ -24,17 +24,31 @@ struct RootView: View {
     }
 
     var body: some View {
-        Group {
+        ZStack(alignment: .top) {
+            Group {
+                if store.isRunning {
+                    PeerListView()
+                } else {
+                    LaunchView()
+                }
+            }
+            .animation(.easeInOut, value: store.isRunning)
+
+            // Update banner floats over content
             if store.isRunning {
-                PeerListView()
-            } else {
-                LaunchView()
+                UpdateBannerView()
+                    .animation(.spring(response: 0.4), value: UpdateChecker.shared.isUpdateAvailable)
             }
         }
         .task {
             if !store.isRunning {
                 await store.start()
             }
+        }
+        .task {
+            // Delay update check so it doesn't compete with node startup
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            await UpdateChecker.shared.checkForUpdates()
         }
         .onChange(of: scenePhase) { phase in
             store.handleScenePhase(phase)
