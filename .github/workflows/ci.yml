@@ -17,6 +17,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+
+      - name: Build web bridge (Go)
+        run: |
+          cd web-go
+          go test ./...
+          go build ./...
+
       - name: Swift version
         run: swift --version
 

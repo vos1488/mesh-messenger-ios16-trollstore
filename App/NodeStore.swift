@@ -159,11 +159,15 @@ public final class NodeStore: ObservableObject {
     @Published public var errorMessage: String? = nil
     @Published public var wanBootstrapRaw: String = ""
     @Published public var debugEvents: [DebugEvent] = []
+    @Published public var webSessionID: String?
+    @Published public var webSessionStatusText: String = "Отключено"
+    @Published public var webSessionAuthorized: Bool = false
 
     private var transport: HybridTransport?
     private var storageEngine: StorageEngine?
     private var ratchetEngine: RatchetEngine?
     private var identityEngine: IdentityEngine?
+    private var webBridgeClient: WebBridgeClient?
     private let fileTransferEngine = FileTransferEngine()
     private let callEngine = MCStreamCallEngine()
     private let backgroundRuntime = BackgroundRuntimeManager()
@@ -261,6 +265,7 @@ public final class NodeStore: ObservableObject {
         deliveryTask?.cancel()
         deliveryTask = nil
         cancelOutgoingCallTimers()
+        disconnectWebSession()
         transport?.stop()
         transport = nil
         callEngine.weakTransport = nil
@@ -628,6 +633,35 @@ public final class NodeStore: ObservableObject {
         UserDefaults.standard.set(raw, forKey: "mesh_wan_bootstrap")
         transport?.updateWANBootstrapEndpoints(parseWANEndpoints(from: raw))
         appendDebug("wan", "bootstrap updated: \(parseWANEndpoints(from: raw).joined(separator: ", "))")
+    }
+
+    public func connectWebSession(from qrPayload: String) {
+        guard let payload = parseWebPairPayload(from: qrPayload) else {
+            webSessionStatusText = "Неверный QR"
+            webSessionAuthorized = false
+            appendDebug("web", "invalid QR payload")
+            return
+        }
+        guard !myPeerIDValue.isEmpty else {
+            webSessionStatusText = "Узел не запущен"
+            webSessionAuthorized = false
+            appendDebug("web", "node not running for web auth")
+            return
+        }
+
+        ensureWebBridgeClient()
+        webSessionID = payload.sessionID
+        webSessionStatusText = "Подключение…"
+        webSessionAuthorized = false
+        appendDebug("web", "connect session \(payload.sessionID.prefix(8))")
+        webBridgeClient?.connect(payload: payload, peerID: myPeerIDValue, nickname: nickname)
+    }
+
+    public func disconnectWebSession() {
+        webBridgeClient?.disconnect(reason: "manual")
+        webSessionID = nil
+        webSessionAuthorized = false
+        webSessionStatusText = "Отключено"
     }
 
     public func unreadCount(for peer: PeerEntry) -> Int {
@@ -1479,6 +1513,83 @@ public final class NodeStore: ObservableObject {
             .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == ";" })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    private func parseWebPairPayload(from raw: String) -> WebPairingPayload? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let url = URL(string: trimmed), url.scheme?.lowercased() == "meshweb" {
+            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+            let sessionID = components.queryItems?.first(where: { $0.name == "sid" || $0.name == "session" })?.value
+            guard let sessionID, !sessionID.isEmpty else { return nil }
+            guard let wsEncoded = components.queryItems?.first(where: { $0.name == "ws" })?.value else { return nil }
+            let wsString = wsEncoded.removingPercentEncoding ?? wsEncoded
+            guard let wsURL = URL(string: wsString),
+                  let scheme = wsURL.scheme?.lowercased(),
+                  scheme == "ws" || scheme == "wss" else { return nil }
+            return WebPairingPayload(sessionID: sessionID, webSocketURL: wsURL)
+        }
+
+        if let url = URL(string: trimmed),
+           let scheme = url.scheme?.lowercased(),
+           (scheme == "ws" || scheme == "wss") {
+            let parts = url.pathComponents.filter { $0 != "/" }
+            let sessionID = parts.last ?? UUID().uuidString
+            return WebPairingPayload(sessionID: sessionID, webSocketURL: url)
+        }
+
+        if let url = URL(string: trimmed),
+           let scheme = url.scheme?.lowercased(),
+           (scheme == "http" || scheme == "https") {
+            let parts = url.pathComponents.filter { $0 != "/" }
+            guard let sessionID = parts.last, !sessionID.isEmpty else { return nil }
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+            components.scheme = scheme == "https" ? "wss" : "ws"
+            components.path = "/ws/mobile/\(sessionID)"
+            components.query = nil
+            guard let wsURL = components.url else { return nil }
+            return WebPairingPayload(sessionID: sessionID, webSocketURL: wsURL)
+        }
+
+        return nil
+    }
+
+    private func ensureWebBridgeClient() {
+        if webBridgeClient != nil { return }
+        let client = WebBridgeClient()
+        client.onEvent = { [weak self] event in
+            guard let self else { return }
+            switch event {
+            case .connecting(let sessionID):
+                self.webSessionID = sessionID
+                self.webSessionAuthorized = false
+                self.webSessionStatusText = "Подключение…"
+                self.appendDebug("web", "connecting \(sessionID.prefix(8))")
+            case .authorized(let sessionID, let nickname):
+                self.webSessionID = sessionID
+                self.webSessionAuthorized = true
+                if let nickname, !nickname.isEmpty {
+                    self.webSessionStatusText = "Авторизовано: \(nickname)"
+                } else {
+                    self.webSessionStatusText = "Авторизовано"
+                }
+                self.appendDebug("web", "authorized \(sessionID.prefix(8))")
+            case .status(let message):
+                self.webSessionStatusText = message
+                self.appendDebug("web", message)
+            case .disconnected(let reason):
+                self.webSessionAuthorized = false
+                self.webSessionStatusText = "Отключено: \(reason)"
+                self.appendDebug("web", "disconnected: \(reason)")
+            case .failed(let message):
+                self.webSessionAuthorized = false
+                self.webSessionStatusText = "Ошибка: \(message)"
+                self.errorMessage = "Web-сессия: \(message)"
+                self.appendDebug("error", "web bridge failed: \(message)")
+            }
+        }
+        webBridgeClient = client
     }
 
     private func appendDebug(_ category: String, _ message: String) {

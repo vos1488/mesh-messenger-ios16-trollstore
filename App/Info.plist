@@ -27,7 +27,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Microphone is required for encrypted voice calls.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Camera is required for video calls.</string>
+	<string>Camera is required for video calls and QR login scanning.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Local network access is required for peer discovery and relay routing.</string>
 	<key>NSBonjourServices</key>

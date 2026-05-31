@@ -37,17 +37,23 @@ public final class MCStreamCallEngine: CallEngine {
     private var captureConverter: AVAudioConverter?
     private var playbackConverter: AVAudioConverter?
     private var receiveAccumulator = Data()
+    private var inputTapInstalled = false
 #endif
     private var outputStream: OutputStream?
     private var inputStream: InputStream?
     private var pendingInputStream: InputStream?
     private let audioQueue = DispatchQueue(label: "mesh.call.audio", qos: .userInteractive)
     private var streamReadTimer: Timer?
+    private var outboundFrames: [Data] = []
+    private var outboundFrameOffset: Int = 0
 
     public init() {}
 
     public func startCall(with peerID: PeerID, media: CallMediaType) async throws {
         state = .connecting
+        await MainActor.run { [weak self] in
+            self?.teardownAudio()
+        }
 
         // Open outgoing MCSession stream to remote peer
         var outStream: OutputStream?
@@ -109,7 +115,7 @@ public final class MCStreamCallEngine: CallEngine {
             commonFormat: .pcmFormatInt16,
             sampleRate: 16_000,
             channels: 1,
-            interleaved: true
+            interleaved: false
         ) else {
             return
         }
@@ -123,11 +129,12 @@ public final class MCStreamCallEngine: CallEngine {
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: outputFormat)
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self, weak outputStream] buf, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 960, format: inputFormat) { [weak self, weak outputStream] buf, _ in
             guard let self else { return }
             guard let outStream = outputStream, outStream.streamStatus == .open else { return }
             self.encodeAndSendCapturedAudio(buf, to: outStream)
         }
+        inputTapInstalled = true
 
         do {
             try engine.start()
@@ -205,30 +212,46 @@ public final class MCStreamCallEngine: CallEngine {
 
         guard status == .haveData || status == .inputRanDry else { return }
         let frameLength = Int(wireBuffer.frameLength)
-        guard frameLength > 0,
-              let int16 = wireBuffer.int16ChannelData?[0] else { return }
-
+        guard frameLength > 0 else { return }
         let payloadBytes = frameLength * MemoryLayout<Int16>.size
-        let safePayloadBytes = min(payloadBytes, Int(UInt16.max))
+        guard payloadBytes > 0, let payload = dataFromPCMBuffer(wireBuffer, byteCount: payloadBytes) else { return }
+
+        let safePayloadBytes = min(payload.count, Int(UInt16.max))
         var header = UInt16(safePayloadBytes).bigEndian
         var frameData = Data(bytes: &header, count: MemoryLayout<UInt16>.size)
-        frameData.append(Data(bytes: int16, count: safePayloadBytes))
-        writeFramedData(frameData, to: stream)
+        frameData.append(payload.prefix(safePayloadBytes))
+        queueFramedData(frameData, to: stream)
     }
 
-    private func writeFramedData(_ data: Data, to stream: OutputStream) {
+    private func queueFramedData(_ data: Data, to stream: OutputStream) {
         audioQueue.async {
-            data.withUnsafeBytes { rawPtr in
-                guard let base = rawPtr.baseAddress else { return }
-                var remaining = data.count
-                var offset = 0
-                while remaining > 0 {
-                    guard stream.hasSpaceAvailable else { break }
-                    let written = stream.write(base.advanced(by: offset).assumingMemoryBound(to: UInt8.self), maxLength: remaining)
-                    guard written > 0 else { break }
-                    offset += written
-                    remaining -= written
-                }
+            self.outboundFrames.append(data)
+            self.flushOutboundFrames(to: stream)
+        }
+    }
+
+    private func flushOutboundFrames(to stream: OutputStream) {
+        while !outboundFrames.isEmpty {
+            guard stream.hasSpaceAvailable else { return }
+            let frame = outboundFrames[0]
+            let remaining = frame.count - outboundFrameOffset
+            guard remaining > 0 else {
+                outboundFrames.removeFirst()
+                outboundFrameOffset = 0
+                continue
+            }
+            let wrote: Int = frame.withUnsafeBytes { raw -> Int in
+                guard let base = raw.baseAddress else { return -1 }
+                return stream.write(
+                    base.advanced(by: outboundFrameOffset).assumingMemoryBound(to: UInt8.self),
+                    maxLength: remaining
+                )
+            }
+            guard wrote > 0 else { return }
+            outboundFrameOffset += wrote
+            if outboundFrameOffset >= frame.count {
+                outboundFrames.removeFirst()
+                outboundFrameOffset = 0
             }
         }
     }
@@ -242,14 +265,9 @@ public final class MCStreamCallEngine: CallEngine {
     ) {
         let frameCount = payload.count / MemoryLayout<Int16>.size
         guard frameCount > 0,
-              let wireBuffer = AVAudioPCMBuffer(pcmFormat: wireFormat, frameCapacity: AVAudioFrameCount(frameCount)),
-              let wirePtr = wireBuffer.int16ChannelData?[0] else { return }
+              let wireBuffer = AVAudioPCMBuffer(pcmFormat: wireFormat, frameCapacity: AVAudioFrameCount(frameCount)) else { return }
         wireBuffer.frameLength = AVAudioFrameCount(frameCount)
-        payload.withUnsafeBytes { raw in
-            if let base = raw.baseAddress {
-                memcpy(wirePtr, base, payload.count)
-            }
-        }
+        copyPayload(payload, to: wireBuffer)
 
         let ratio = outputFormat.sampleRate / max(1, wireFormat.sampleRate)
         let outCapacity = AVAudioFrameCount(Double(wireBuffer.frameLength) * ratio) + 64
@@ -271,6 +289,35 @@ public final class MCStreamCallEngine: CallEngine {
             player.scheduleBuffer(outBuffer, completionHandler: nil)
         }
     }
+
+    private func dataFromPCMBuffer(_ buffer: AVAudioPCMBuffer, byteCount: Int) -> Data? {
+        if let ptr = buffer.int16ChannelData?[0] {
+            return Data(bytes: ptr, count: byteCount)
+        }
+        let abl = buffer.audioBufferList.pointee.mBuffers
+        guard let mData = abl.mData else { return nil }
+        let available = Int(abl.mDataByteSize)
+        guard available > 0 else { return nil }
+        return Data(bytes: mData, count: min(byteCount, available))
+    }
+
+    private func copyPayload(_ payload: Data, to buffer: AVAudioPCMBuffer) {
+        if let ptr = buffer.int16ChannelData?[0] {
+            payload.withUnsafeBytes { raw in
+                if let base = raw.baseAddress {
+                    memcpy(ptr, base, payload.count)
+                }
+            }
+            return
+        }
+        var abl = buffer.audioBufferList.pointee
+        guard let mData = abl.mBuffers.mData else { return }
+        payload.withUnsafeBytes { raw in
+            if let base = raw.baseAddress {
+                memcpy(mData, base, min(payload.count, Int(abl.mBuffers.mDataByteSize)))
+            }
+        }
+    }
 #endif
 
     @MainActor
@@ -278,7 +325,10 @@ public final class MCStreamCallEngine: CallEngine {
         streamReadTimer?.invalidate()
         streamReadTimer = nil
 #if canImport(AVFoundation)
-        audioEngine?.inputNode.removeTap(onBus: 0)
+        if inputTapInstalled {
+            audioEngine?.inputNode.removeTap(onBus: 0)
+            inputTapInstalled = false
+        }
         playerNode?.stop()
         audioEngine?.stop()
         audioEngine = nil
@@ -289,6 +339,10 @@ public final class MCStreamCallEngine: CallEngine {
         playbackConverter = nil
         receiveAccumulator.removeAll(keepingCapacity: false)
 #endif
+        audioQueue.sync {
+            outboundFrames.removeAll(keepingCapacity: false)
+            outboundFrameOffset = 0
+        }
         outputStream?.close()
         inputStream?.close()
         outputStream = nil

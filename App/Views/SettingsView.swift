@@ -9,6 +9,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @State private var editedNickname = ""
     @State private var wanBootstrap = ""
+    @State private var showQRScanner = false
 
     var body: some View {
         NavigationStack {
@@ -84,6 +85,35 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Web версия") {
+                    HStack {
+                        Text("Статус")
+                        Spacer()
+                        Text(store.webSessionStatusText)
+                            .font(.caption)
+                            .foregroundStyle(store.webSessionAuthorized ? .green : .secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    if let sessionID = store.webSessionID {
+                        HStack {
+                            Text("Session")
+                            Spacer()
+                            Text(sessionID)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Button("Сканировать QR для web login") {
+                        showQRScanner = true
+                    }
+                    if store.webSessionID != nil {
+                        Button("Отключить web сессию", role: .destructive) {
+                            store.disconnectWebSession()
+                        }
+                    }
+                }
+
                 Section("О приложении") {
                     LabeledContent("Версия", value: "1.0 MVP")
                     LabeledContent("Протокол", value: "MeshMessenger P2P")
@@ -108,6 +138,12 @@ struct SettingsView: View {
             .onAppear {
                 editedNickname = store.nickname
                 wanBootstrap = store.wanBootstrapRaw
+            }
+            .sheet(isPresented: $showQRScanner) {
+                QRScannerSheet { value in
+                    store.connectWebSession(from: value)
+                    showQRScanner = false
+                }
             }
         }
     }
