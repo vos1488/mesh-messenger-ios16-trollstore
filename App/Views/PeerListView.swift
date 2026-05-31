@@ -59,7 +59,7 @@ struct PeerListView: View {
         let activePeers = uniquePeers.filter { !store.threadSettings(for: $0.peerID.value).isArchived }
         let archivedPeers = uniquePeers.filter { store.threadSettings(for: $0.peerID.value).isArchived }
 
-        List {
+        return List {
             Section("Узлы сети (\(activePeers.count))") {
                 ForEach(sortedPeers(activePeers)) { peer in
                     let peerID = peer.peerID.value

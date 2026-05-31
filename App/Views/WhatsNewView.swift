@@ -112,5 +112,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.4")
+    WhatsNewView(version: "1.4.1")
 }
