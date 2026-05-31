@@ -106,6 +106,25 @@ public struct ChatMessage: Identifiable, Equatable, Codable {
     }
 }
 
+public struct ChatThreadSettings: Equatable, Codable {
+    public var isMuted: Bool
+    public var isPinned: Bool
+    public var isArchived: Bool
+    public var markedUnread: Bool
+
+    public init(
+        isMuted: Bool = false,
+        isPinned: Bool = false,
+        isArchived: Bool = false,
+        markedUnread: Bool = false
+    ) {
+        self.isMuted = isMuted
+        self.isPinned = isPinned
+        self.isArchived = isArchived
+        self.markedUnread = markedUnread
+    }
+}
+
 public struct IncomingCallOffer: Identifiable, Equatable {
     public let id: UUID
     public let peerID: String
@@ -164,6 +183,7 @@ public final class NodeStore: ObservableObject {
     @Published public var webSessionAuthorized: Bool = false
     @Published public var callMicrophoneMuted: Bool = false
     @Published public var callSpeakerEnabled: Bool = true
+    @Published public var chatThreadSettings: [String: ChatThreadSettings] = [:]
 
     private var transport: HybridTransport?
     private var storageEngine: StorageEngine?
@@ -430,6 +450,19 @@ public final class NodeStore: ObservableObject {
         }
     }
 
+    public func deleteLocalMessage(peerID: String, messageID: UUID) {
+        guard var thread = messages[peerID] else { return }
+        thread.removeAll { $0.id == messageID }
+        messages[peerID] = thread
+        knownMessageIDs.remove(messageID)
+        guard let storageEngine else { return }
+        do {
+            try storageEngine.deleteMessage(messageID: messageID)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     public func clearAllChats() {
         messages.removeAll()
         knownMessageIDs.removeAll()
@@ -449,10 +482,12 @@ public final class NodeStore: ObservableObject {
         knownMessageIDs.subtract(removedIDs)
         peers.removeAll { $0.peerID.value == peerID }
         messages.removeValue(forKey: peerID)
+        chatThreadSettings.removeValue(forKey: peerID)
         guard let storageEngine else { return }
         do {
             try storageEngine.deleteMessages(peerID: peerID)
             try storageEngine.deletePeer(peerID: peerID)
+            try storageEngine.deleteChatThreadSettings(peerID: peerID)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -472,6 +507,10 @@ public final class NodeStore: ObservableObject {
                 }
             }
             messages[peerID] = thread
+            if var settings = chatThreadSettings[peerID], settings.markedUnread {
+                settings.markedUnread = false
+                setChatThreadSettings(peerID: peerID, settings: settings)
+            }
 
             if let latestRead = readIDs.last {
                 let receipt = TransportMessage(
@@ -775,7 +814,41 @@ public final class NodeStore: ObservableObject {
     }
 
     public func unreadCount(for peer: PeerEntry) -> Int {
-        (messages[peer.peerID.value] ?? []).filter { !$0.isMe && !$0.isRead }.count
+        let peerID = peer.peerID.value
+        let unread = (messages[peerID] ?? []).filter { !$0.isMe && !$0.isRead }.count
+        let forced = chatThreadSettings[peerID]?.markedUnread ?? false
+        return forced && unread == 0 ? 1 : unread
+    }
+
+    public func threadSettings(for peerID: String) -> ChatThreadSettings {
+        chatThreadSettings[peerID] ?? ChatThreadSettings()
+    }
+
+    public func setChatMuted(peerID: String, muted: Bool) {
+        var settings = threadSettings(for: peerID)
+        settings.isMuted = muted
+        setChatThreadSettings(peerID: peerID, settings: settings)
+    }
+
+    public func setChatPinned(peerID: String, pinned: Bool) {
+        var settings = threadSettings(for: peerID)
+        settings.isPinned = pinned
+        setChatThreadSettings(peerID: peerID, settings: settings)
+    }
+
+    public func setChatArchived(peerID: String, archived: Bool) {
+        var settings = threadSettings(for: peerID)
+        settings.isArchived = archived
+        if archived {
+            settings.markedUnread = false
+        }
+        setChatThreadSettings(peerID: peerID, settings: settings)
+    }
+
+    public func markConversationUnread(peerID: String) {
+        var settings = threadSettings(for: peerID)
+        settings.markedUnread = true
+        setChatThreadSettings(peerID: peerID, settings: settings)
     }
 
     public func toggleCallMicrophoneMuted() {
@@ -908,7 +981,7 @@ public final class NodeStore: ObservableObject {
             appendOrUpdateMessage(peerID: logicalSender.value, mapFromRecord(incoming))
             upsertPeerFromMessage(senderID: logicalSender, nickname: packet.senderNickname)
             sendAck(for: packet.id, to: logicalSender)
-            notifyIncomingMessage(from: packet.senderNickname, text: text)
+            notifyIncomingMessage(from: packet.senderNickname, text: text, peerID: logicalSender.value)
 
         case .fileMeta:
             if let fileID = packet.fileID, let name = packet.fileName, let totalChunks = packet.fileTotalChunks {
@@ -1543,6 +1616,7 @@ public final class NodeStore: ObservableObject {
         guard let storageEngine else { return }
         peers.removeAll()
         messages.removeAll()
+        chatThreadSettings.removeAll()
         knownMessageIDs.removeAll()
 
         let storedPeers = (try? storageEngine.fetchChatPeers()) ?? []
@@ -1563,6 +1637,16 @@ public final class NodeStore: ObservableObject {
             )
             peer.lastSeen = row.lastSeen
             return peer
+        }
+
+        let storedThreadSettings = (try? storageEngine.fetchChatThreadSettings()) ?? []
+        for row in storedThreadSettings {
+            chatThreadSettings[row.peerID] = ChatThreadSettings(
+                isMuted: row.isMuted,
+                isPinned: row.isPinned,
+                isArchived: row.isArchived,
+                markedUnread: row.markedUnread
+            )
         }
 
         for peer in peers {
@@ -1591,6 +1675,21 @@ public final class NodeStore: ObservableObject {
                 isVerified: peer.isVerified,
                 keyVersion: peer.keyVersion,
                 trustWarning: peer.trustWarning
+            )
+        )
+    }
+
+    private func setChatThreadSettings(peerID: String, settings: ChatThreadSettings) {
+        chatThreadSettings[peerID] = settings
+        guard let storageEngine else { return }
+        try? storageEngine.upsertChatThreadSettings(
+            StoredChatThreadSettings(
+                peerID: peerID,
+                isMuted: settings.isMuted,
+                isPinned: settings.isPinned,
+                isArchived: settings.isArchived,
+                markedUnread: settings.markedUnread,
+                updatedAt: Date()
             )
         )
     }
@@ -1869,7 +1968,10 @@ public final class NodeStore: ObservableObject {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
-    private func notifyIncomingMessage(from nickname: String, text: String) {
+    private func notifyIncomingMessage(from nickname: String, text: String, peerID: String? = nil) {
+        if let peerID, threadSettings(for: peerID).isMuted {
+            return
+        }
         #if canImport(UIKit)
         if UIApplication.shared.applicationState == .active {
             return

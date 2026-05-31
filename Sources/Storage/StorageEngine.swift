@@ -23,6 +23,15 @@ public struct StoredPeerRecord: Sendable, Equatable {
     public var trustWarning: String?
 }
 
+public struct StoredChatThreadSettings: Sendable, Equatable {
+    public let peerID: String
+    public var isMuted: Bool
+    public var isPinned: Bool
+    public var isArchived: Bool
+    public var markedUnread: Bool
+    public var updatedAt: Date
+}
+
 public struct StoredMessageRecord: Sendable, Equatable {
     public let messageID: UUID
     public var peerID: String
@@ -175,6 +184,16 @@ public final class StorageEngine {
                 is_verified INTEGER NOT NULL DEFAULT 0,
                 key_version INTEGER NOT NULL DEFAULT 1,
                 trust_warning TEXT,
+                updated_at REAL NOT NULL
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS ChatThreadSettings (
+                peer_id TEXT PRIMARY KEY,
+                is_muted INTEGER NOT NULL DEFAULT 0,
+                is_pinned INTEGER NOT NULL DEFAULT 0,
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                marked_unread INTEGER NOT NULL DEFAULT 0,
                 updated_at REAL NOT NULL
             );
             """,
@@ -352,6 +371,54 @@ public final class StorageEngine {
                 keyVersion: Int(columnInt(statement: statement, index: 8)),
                 trustWarning: columnText(statement: statement, index: 9)
             )
+        }
+    }
+
+    public func upsertChatThreadSettings(_ settings: StoredChatThreadSettings) throws {
+        let sql = """
+        INSERT INTO ChatThreadSettings(peer_id, is_muted, is_pinned, is_archived, marked_unread, updated_at)
+        VALUES(?, ?, ?, ?, ?, ?)
+        ON CONFLICT(peer_id) DO UPDATE SET
+            is_muted = excluded.is_muted,
+            is_pinned = excluded.is_pinned,
+            is_archived = excluded.is_archived,
+            marked_unread = excluded.marked_unread,
+            updated_at = excluded.updated_at;
+        """
+        try executePrepared(sql: sql) { statement in
+            bindText(statement: statement, index: 1, value: settings.peerID)
+            bindInt(statement: statement, index: 2, value: settings.isMuted ? 1 : 0)
+            bindInt(statement: statement, index: 3, value: settings.isPinned ? 1 : 0)
+            bindInt(statement: statement, index: 4, value: settings.isArchived ? 1 : 0)
+            bindInt(statement: statement, index: 5, value: settings.markedUnread ? 1 : 0)
+            bindDouble(statement: statement, index: 6, value: settings.updatedAt.timeIntervalSince1970)
+        }
+    }
+
+    public func fetchChatThreadSettings() throws -> [StoredChatThreadSettings] {
+        let sql = """
+        SELECT peer_id, is_muted, is_pinned, is_archived, marked_unread, updated_at
+        FROM ChatThreadSettings;
+        """
+        return try queryPrepared(sql: sql) { statement in
+            guard let peerID = columnText(statement: statement, index: 0) else {
+                return nil
+            }
+            return StoredChatThreadSettings(
+                peerID: peerID,
+                isMuted: columnInt(statement: statement, index: 1) != 0,
+                isPinned: columnInt(statement: statement, index: 2) != 0,
+                isArchived: columnInt(statement: statement, index: 3) != 0,
+                markedUnread: columnInt(statement: statement, index: 4) != 0,
+                updatedAt: Date(timeIntervalSince1970: columnDouble(statement: statement, index: 5))
+            )
+        }
+    }
+
+    public func deleteChatThreadSettings(peerID: String) throws {
+        let sql = "DELETE FROM ChatThreadSettings WHERE peer_id = ?;"
+        try executePrepared(sql: sql) { statement in
+            bindText(statement: statement, index: 1, value: peerID)
         }
     }
 
@@ -621,6 +688,16 @@ public final class StorageEngine {
         let sql = "DELETE FROM ChatMessages WHERE peer_id = ?;"
         try executePrepared(sql: sql) { statement in
             bindText(statement: statement, index: 1, value: peerID)
+        }
+        #endif
+    }
+
+    /// Delete one message by message_id (local-only deletion).
+    public func deleteMessage(messageID: UUID) throws {
+        #if canImport(SQLite3)
+        let sql = "DELETE FROM ChatMessages WHERE message_id = ?;"
+        try executePrepared(sql: sql) { statement in
+            bindText(statement: statement, index: 1, value: messageID.uuidString)
         }
         #endif
     }

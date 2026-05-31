@@ -20,17 +20,17 @@
 
 ## Stage 2 — Messaging UX & chat management (v1.4)
 
-- [ ] Ввести чат-настройки: mute, pin, archive, mark unread
+- [x] Ввести чат-настройки: mute, pin, archive, mark unread
 - [x] Добавить массовую очистку: «Очистить все чаты»
-- [ ] Добавить удаление отдельного сообщения у себя (local delete)
-- [ ] Добавить batched preload истории при скролле вверх (pagination)
-- [ ] Улучшить поиск по сообщениям (фразы, фильтры, дата/тип)
+- [x] Добавить удаление отдельного сообщения у себя (local delete)
+- [x] Добавить batched preload истории при скролле вверх (pagination)
+- [x] Улучшить поиск по сообщениям (фразы, фильтры, дата/тип)
 - [ ] Реализовать цитирование (reply-to message)
 - [ ] Реализовать пересылку сообщений между диалогами
 - [ ] Добавить индикатор «печатает…» и online-presence heartbeat
 - [ ] Добавить индикатор прогресса отправки файлов в bubble
-- [ ] Внедрить единый UI статусов доставки: queued/sent/delivered/read/failed
-- [ ] Добавить «jump to first unread» в длинных диалогах
+- [x] Внедрить единый UI статусов доставки: queued/sent/delivered/read/failed
+- [x] Добавить «jump to first unread» в длинных диалогах
 - [ ] Добавить управление автоудалением истории (retention policy)
 
 ## Stage 3 — Groups and secure multiparty chat (v1.5)

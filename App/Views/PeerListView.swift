@@ -52,29 +52,63 @@ struct PeerListView: View {
     }
 
     private var peerList: some View {
+        let uniquePeers: [PeerEntry] = {
+            var seen = Set<String>()
+            return store.peers.filter { seen.insert($0.peerID.value).inserted }
+        }()
+        let activePeers = uniquePeers.filter { !store.threadSettings(for: $0.peerID.value).isArchived }
+        let archivedPeers = uniquePeers.filter { store.threadSettings(for: $0.peerID.value).isArchived }
+
         List {
-            Section("Узлы сети (\(store.peers.count))") {
-                // Deduplicate by peerID before displaying
-                let uniquePeers: [PeerEntry] = {
-                    var seen = Set<String>()
-                    return store.peers.filter { seen.insert($0.peerID.value).inserted }
-                }()
-                ForEach(uniquePeers.sorted { a, b in
-                    let aLast = store.messages[a.peerID.value]?.last?.timestamp ?? a.lastSeen
-                    let bLast = store.messages[b.peerID.value]?.last?.timestamp ?? b.lastSeen
-                    return aLast > bLast
-                }) { peer in
+            Section("Узлы сети (\(activePeers.count))") {
+                ForEach(sortedPeers(activePeers)) { peer in
+                    let peerID = peer.peerID.value
+                    let settings = store.threadSettings(for: peerID)
                     NavigationLink(destination: ChatView(peer: peer).environmentObject(store)) {
-                        PeerRowView(peer: peer, lastMessage: store.messages[peer.peerID.value]?.last)
+                        PeerRowView(
+                            peer: peer,
+                            lastMessage: store.messages[peerID]?.last,
+                            unreadCount: store.unreadCount(for: peer),
+                            isPinned: settings.isPinned,
+                            isMuted: settings.isMuted
+                        )
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button {
+                            store.setChatPinned(peerID: peerID, pinned: !settings.isPinned)
+                        } label: {
+                            Label(settings.isPinned ? "Открепить" : "Закрепить", systemImage: settings.isPinned ? "pin.slash" : "pin")
+                        }
+                        .tint(.yellow)
+                        Button {
+                            store.setChatMuted(peerID: peerID, muted: !settings.isMuted)
+                        } label: {
+                            Label(settings.isMuted ? "Включить звук" : "Без звука", systemImage: settings.isMuted ? "bell" : "bell.slash")
+                        }
+                        .tint(.indigo)
+                        Button {
+                            if store.unreadCount(for: peer) > 0 {
+                                store.markConversationRead(peerID: peerID)
+                            } else {
+                                store.markConversationUnread(peerID: peerID)
+                            }
+                        } label: {
+                            Label(store.unreadCount(for: peer) > 0 ? "Прочитано" : "Не прочитано", systemImage: "envelope.badge")
+                        }
+                        .tint(.blue)
+                        Button {
+                            store.setChatArchived(peerID: peerID, archived: true)
+                        } label: {
+                            Label("В архив", systemImage: "archivebox")
+                        }
+                        .tint(.gray)
                         Button(role: .destructive) {
-                            store.clearChat(peerID: peer.peerID.value)
+                            store.clearChat(peerID: peerID)
                         } label: {
                             Label("Очистить", systemImage: "bubble.left.and.bubble.right")
                         }
                         Button(role: .destructive) {
-                            store.removePeer(peerID: peer.peerID.value)
+                            store.removePeer(peerID: peerID)
                         } label: {
                             Label("Удалить", systemImage: "person.fill.xmark")
                         }
@@ -82,9 +116,53 @@ struct PeerListView: View {
                     }
                 }
             }
+            if !archivedPeers.isEmpty {
+                Section("Архив (\(archivedPeers.count))") {
+                    ForEach(sortedPeers(archivedPeers)) { peer in
+                        let peerID = peer.peerID.value
+                        let settings = store.threadSettings(for: peerID)
+                        NavigationLink(destination: ChatView(peer: peer).environmentObject(store)) {
+                            PeerRowView(
+                                peer: peer,
+                                lastMessage: store.messages[peerID]?.last,
+                                unreadCount: store.unreadCount(for: peer),
+                                isPinned: settings.isPinned,
+                                isMuted: settings.isMuted
+                            )
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button {
+                                store.setChatArchived(peerID: peerID, archived: false)
+                            } label: {
+                                Label("Из архива", systemImage: "tray.and.arrow.up")
+                            }
+                            .tint(.green)
+                            Button {
+                                store.setChatMuted(peerID: peerID, muted: !settings.isMuted)
+                            } label: {
+                                Label(settings.isMuted ? "Включить звук" : "Без звука", systemImage: settings.isMuted ? "bell" : "bell.slash")
+                            }
+                            .tint(.indigo)
+                        }
+                    }
+                }
+            }
             Section("Мой узел") {
                 myIDCard
             }
+        }
+    }
+
+    private func sortedPeers(_ peers: [PeerEntry]) -> [PeerEntry] {
+        peers.sorted { a, b in
+            let aSettings = store.threadSettings(for: a.peerID.value)
+            let bSettings = store.threadSettings(for: b.peerID.value)
+            if aSettings.isPinned != bSettings.isPinned {
+                return aSettings.isPinned && !bSettings.isPinned
+            }
+            let aLast = store.messages[a.peerID.value]?.last?.timestamp ?? a.lastSeen
+            let bLast = store.messages[b.peerID.value]?.last?.timestamp ?? b.lastSeen
+            return aLast > bLast
         }
     }
 
@@ -122,6 +200,9 @@ struct PeerListView: View {
 struct PeerRowView: View {
     let peer: PeerEntry
     var lastMessage: ChatMessage? = nil
+    var unreadCount: Int = 0
+    var isPinned: Bool = false
+    var isMuted: Bool = false
 
     var body: some View {
         HStack {
@@ -154,6 +235,26 @@ struct PeerRowView: View {
                     Text(timeString(last.timestamp))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 6) {
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                    }
+                    if isMuted {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if unreadCount > 0 {
+                        Text(unreadCount > 99 ? "99+" : "\(unreadCount)")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.accentColor))
+                    }
                 }
             }
         }

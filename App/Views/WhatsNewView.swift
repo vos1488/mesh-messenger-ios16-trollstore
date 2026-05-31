@@ -6,10 +6,11 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
-        ("checkmark.shield.fill", .blue,   "Stage 1 завершён",   "Закрыты ключевые задачи стабилизации ядра и усилена надёжность доставки."),
-        ("arrow.clockwise.circle.fill", .green, "Надёжная доставка", "Единый retry/backoff для сообщений, файлов, ACK и read-receipt при потере маршрута."),
-        ("bolt.horizontal.circle.fill", .orange, "Быстрый старт", "Оптимизирован cold start, снижена нагрузка discovery, добавлен startup smoke-check."),
-        ("bubble.left.and.bubble.right.fill", .purple, "Чаты без дублей", "После перезапуска чаты и outbox восстанавливаются корректно без дублей."),
+        ("slider.horizontal.3", .blue, "Управление чатами", "Добавлены mute, pin, archive и mark unread прямо из списка и экрана диалога."),
+        ("clock.arrow.trianglehead.counterclockwise.rotate.90", .orange, "Умная история", "История подгружается батчами при прокрутке вверх, без резких скачков UI."),
+        ("magnifyingglass.circle.fill", .green, "Поиск и фильтры", "Поиск по фразам с фильтрами по типу сообщений и периоду времени."),
+        ("arrow.down.circle.fill", .purple, "Навигация по непрочитанным", "Кнопка быстрого перехода к первому непрочитанному сообщению в длинных чатах."),
+        ("checkmark.message.fill", .teal, "Статусы доставки", "Единый UI статусов сообщений: в очереди, отправлено, доставлено, прочитано, ошибка."),
     ]
 
     var body: some View {
@@ -111,5 +112,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.3")
+    WhatsNewView(version: "1.4")
 }
