@@ -16,9 +16,9 @@ public enum InstallerType: String {
     public var installInstructions: String {
         switch self {
         case .trollstore:
-            return "Обновление скачивается через GitHub API (закрытый репозиторий), затем передаётся в TrollStore."
+            return "Нажмите «Установить» — IPA скачается и передастся в TrollStore автоматически."
         case .esign, .unknown:
-            return "Обновление скачивается через GitHub API (закрытый репозиторий), затем открывается меню «Поделиться» для ESign / GBox."
+            return "Нажмите «Скачать» — IPA скачается и откроется меню «Поделиться» для импорта в ESign / GBox."
         }
     }
 }
@@ -132,11 +132,9 @@ public final class UpdateChecker: ObservableObject {
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 switch http.statusCode {
                 case 401, 403:
-                    lastCheckError = "Требуется GitHub Token (настройки → Обновления)"
+                    lastCheckError = "Доступ запрещён. Если это приватный форк — добавьте GitHub Token в настройки."
                 case 404:
-                    lastCheckError = githubToken.isEmpty
-                        ? "Для закрытого репозитория добавьте GitHub Token (Contents: Read)"
-                        : "Репозиторий или релиз не найден"
+                    lastCheckError = "Релиз не найден. Проверьте URL манифеста."
                 default:
                     lastCheckError = "HTTP \(http.statusCode)"
                 }
@@ -239,7 +237,9 @@ public final class UpdateChecker: ObservableObject {
             return
         }
 
-        let source = updateAssetAPIURL ?? downloadURL
+        // Prefer browser_download_url for public repo (no auth needed).
+        // Fall back to API URL (may require token for private forks).
+        let source = downloadURL ?? updateAssetAPIURL
         guard let source else {
             lastCheckError = "Не найден IPA-ассет релиза"
             return
@@ -269,8 +269,8 @@ public final class UpdateChecker: ObservableObject {
         request.setValue("MeshMessenger/\(currentVersion) iOS-UpdateInstaller", forHTTPHeaderField: "User-Agent")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
 
-        if shouldUseGitHubAuth(for: sourceURL) {
-            guard !githubToken.isEmpty else { throw UpdateError.missingTokenForPrivateRepo }
+        // Add auth only if a token is configured (needed for private forks only)
+        if shouldUseGitHubAuth(for: sourceURL), !githubToken.isEmpty {
             request.setValue("Bearer \(githubToken)", forHTTPHeaderField: "Authorization")
         }
 
