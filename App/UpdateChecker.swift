@@ -317,8 +317,17 @@ public final class UpdateChecker: ObservableObject {
 
     private func presentInstaller(for localIPA: URL) {
 #if canImport(UIKit)
+        let tempDir = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        let ipaURL = localIPA.standardizedFileURL
+        guard ipaURL.isFileURL,
+              ipaURL.path.hasPrefix(tempDir),
+              ipaURL.pathExtension.lowercased() == "ipa" else {
+            lastCheckError = "Небезопасный путь файла обновления"
+            return
+        }
+
         if installerType == .trollstore {
-            let encoded = localIPA.absoluteString
+            let encoded = ipaURL.absoluteString
                 .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
             if let tsURL = URL(string: "apple-magnifier://install?url=\(encoded)"),
                UIApplication.shared.canOpenURL(tsURL) {
@@ -326,7 +335,7 @@ public final class UpdateChecker: ObservableObject {
                 return
             }
         }
-        presentShareSheet(for: localIPA)
+        presentShareSheet(for: ipaURL)
 #endif
     }
 

@@ -61,6 +61,7 @@ public final class MCStreamCallEngine: CallEngine {
     private let maxFramePayloadBytes = 4096
     /// Guards readAudioFromStream against accessing audio objects after teardown.
     private var isReceivingActive = false
+    private let receiveStateLock = NSLock()
 
     public init() {}
 
@@ -199,18 +200,24 @@ public final class MCStreamCallEngine: CallEngine {
     private func startReceiving(stream: InputStream, from peerID: PeerID) {
         // Invalidate timer FIRST — before touching receiveAccumulator — to prevent
         // the timer callback from racing with the removeAll below.
+        receiveStateLock.lock()
         isReceivingActive = false
+        receiveStateLock.unlock()
         streamReadTimer?.invalidate()
         streamReadTimer = nil
         activePeerID = peerID
         inputStream?.close()
         inputStream = stream
 #if canImport(AVFoundation)
+        receiveStateLock.lock()
         receiveAccumulator.removeAll(keepingCapacity: true)
+        receiveStateLock.unlock()
 #endif
         stream.schedule(in: .main, forMode: .common)
         stream.open()
+        receiveStateLock.lock()
         isReceivingActive = true
+        receiveStateLock.unlock()
         let timer = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
             self?.readAudioFromStream()
         }
@@ -220,22 +227,28 @@ public final class MCStreamCallEngine: CallEngine {
 
     private func readAudioFromStream() {
 #if canImport(AVFoundation)
-        guard isReceivingActive else { return }
         guard let stream = inputStream, stream.hasBytesAvailable,
-              let player = playerNode,
               let engine = audioEngine, engine.isRunning,
               let callWireFormat = wireFormat,
               let outFormat = playbackFormat,
-              let converter = playbackConverter else { return }
+               let converter = playbackConverter else { return }
 
         var buf = [UInt8](repeating: 0, count: 8192)
         let count = stream.read(&buf, maxLength: buf.count)
         guard count > 0 else { return }
+
+        var payloads: [Data] = []
+        receiveStateLock.lock()
+        guard isReceivingActive else {
+            receiveStateLock.unlock()
+            return
+        }
         receiveAccumulator.append(contentsOf: buf.prefix(count))
 
         // Discard if accumulator grows unreasonably large (corrupt stream)
         if receiveAccumulator.count > 131_072 {
             receiveAccumulator.removeAll(keepingCapacity: true)
+            receiveStateLock.unlock()
             return
         }
 
@@ -250,9 +263,15 @@ public final class MCStreamCallEngine: CallEngine {
 
             let payload = Data(receiveAccumulator[2..<totalFrameSize])
             receiveAccumulator.removeFirst(totalFrameSize)
+            payloads.append(payload)
+        }
+        let active = isReceivingActive
+        receiveStateLock.unlock()
+
+        guard active else { return }
+        for payload in payloads {
             // Re-check audio engine is still valid before scheduling playback
-            guard isReceivingActive,
-                  let liveEngine = audioEngine, liveEngine.isRunning,
+            guard let liveEngine = audioEngine, liveEngine.isRunning,
                   let livePlayer = playerNode else { return }
             enqueuePlaybackPayload(payload, wireFormat: callWireFormat, outputFormat: outFormat, converter: converter, player: livePlayer)
         }
@@ -398,7 +417,9 @@ public final class MCStreamCallEngine: CallEngine {
     @MainActor
     private func teardownAudio() {
         // Disable timer callback guard FIRST to stop readAudioFromStream from processing
+        receiveStateLock.lock()
         isReceivingActive = false
+        receiveStateLock.unlock()
         streamReadTimer?.invalidate()
         streamReadTimer = nil
 #if canImport(AVFoundation)
@@ -414,7 +435,9 @@ public final class MCStreamCallEngine: CallEngine {
         playbackFormat = nil
         captureConverter = nil
         playbackConverter = nil
+        receiveStateLock.lock()
         receiveAccumulator.removeAll(keepingCapacity: false)
+        receiveStateLock.unlock()
 #endif
         audioQueue.sync {
             outboundFrames.removeAll(keepingCapacity: false)

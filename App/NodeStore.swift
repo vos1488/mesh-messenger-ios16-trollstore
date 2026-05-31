@@ -889,12 +889,13 @@ public final class NodeStore: ObservableObject {
 
         case .fileMeta:
             if let fileID = packet.fileID, let name = packet.fileName, let totalChunks = packet.fileTotalChunks {
-                incomingFileNames[fileID] = name
+                let safeName = sanitizedIncomingFileName(name, fileID: fileID)
+                incomingFileNames[fileID] = safeName
                 try? storageEngine?.upsertFileTransfer(
                     StoredFileTransferRecord(
                         fileID: fileID,
                         peerID: logicalSender.value,
-                        displayName: name,
+                        displayName: safeName,
                         sizeBytes: 0,
                         chunkSize: awaitChunkSize,
                         totalChunks: totalChunks,
@@ -941,7 +942,7 @@ public final class NodeStore: ObservableObject {
                 StoredFileTransferRecord(
                     fileID: fileID,
                     peerID: fromPeerID.value,
-                    displayName: incomingFileNames[fileID] ?? (packet.fileName ?? "file.bin"),
+                    displayName: incomingFileNames[fileID] ?? sanitizedIncomingFileName(packet.fileName ?? "file.bin", fileID: fileID),
                     sizeBytes: 0,
                     chunkSize: awaitChunkSize,
                     totalChunks: total,
@@ -957,13 +958,24 @@ public final class NodeStore: ObservableObject {
                 let rebuilt = try await fileTransferEngine.reassemble(transferID: fileID)
                 let receiveDir = appStoreDir.appendingPathComponent("received", isDirectory: true)
                 try? FileManager.default.createDirectory(at: receiveDir, withIntermediateDirectories: true)
-                let fileName = incomingFileNames[fileID] ?? "received-\(fileID.uuidString).bin"
+                let fileName = incomingFileNames[fileID] ?? sanitizedIncomingFileName("received-\(fileID.uuidString).bin", fileID: fileID)
                 let url = receiveDir.appendingPathComponent(fileName)
                 try rebuilt.write(to: url, options: .atomic)
             } catch {
                 errorMessage = "Файл повреждён: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func sanitizedIncomingFileName(_ raw: String, fileID: UUID) -> String {
+        let invalid = CharacterSet(charactersIn: "\\/:*?\"<>|")
+        let compact = raw.components(separatedBy: invalid).joined(separator: "_")
+        let trimmed = compact.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "received-\(fileID.uuidString).bin"
+        }
+        // Keep names reasonable and filesystem-friendly.
+        return String(trimmed.prefix(96))
     }
 
     private func decryptOrFallback(packet: TransportMessage, fromPeerID: PeerID) async -> String {
