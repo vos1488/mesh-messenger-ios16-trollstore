@@ -37,6 +37,10 @@ struct RootView: View {
             // Update banner floats over content
             if store.isRunning {
                 UpdateBannerView()
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    ))
                     .animation(.spring(response: 0.4), value: UpdateChecker.shared.isUpdateAvailable)
             }
         }
@@ -46,9 +50,9 @@ struct RootView: View {
             }
         }
         .task {
-            // Delay update check so it doesn't compete with node startup
+            // Always check on cold start so update banner appears immediately after new releases
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            await UpdateChecker.shared.checkForUpdates()
+            await UpdateChecker.shared.checkForUpdates(force: true)
         }
         .onChange(of: scenePhase) { phase in
             store.handleScenePhase(phase)

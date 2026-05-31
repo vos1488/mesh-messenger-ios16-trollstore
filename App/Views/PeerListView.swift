@@ -54,13 +54,31 @@ struct PeerListView: View {
     private var peerList: some View {
         List {
             Section("Узлы сети (\(store.peers.count))") {
-                ForEach(store.peers.sorted { a, b in
+                // Deduplicate by peerID before displaying
+                let uniquePeers: [PeerEntry] = {
+                    var seen = Set<String>()
+                    return store.peers.filter { seen.insert($0.peerID.value).inserted }
+                }()
+                ForEach(uniquePeers.sorted { a, b in
                     let aLast = store.messages[a.peerID.value]?.last?.timestamp ?? a.lastSeen
                     let bLast = store.messages[b.peerID.value]?.last?.timestamp ?? b.lastSeen
                     return aLast > bLast
                 }) { peer in
                     NavigationLink(destination: ChatView(peer: peer).environmentObject(store)) {
                         PeerRowView(peer: peer, lastMessage: store.messages[peer.peerID.value]?.last)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            store.clearChat(peerID: peer.peerID.value)
+                        } label: {
+                            Label("Очистить", systemImage: "bubble.left.and.bubble.right")
+                        }
+                        Button(role: .destructive) {
+                            store.removePeer(peerID: peer.peerID.value)
+                        } label: {
+                            Label("Удалить", systemImage: "person.fill.xmark")
+                        }
+                        .tint(.red)
                     }
                 }
             }

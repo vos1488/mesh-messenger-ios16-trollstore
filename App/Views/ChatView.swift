@@ -6,6 +6,7 @@ struct ChatView: View {
     @EnvironmentObject var store: NodeStore
     @State private var inputText = ""
     @State private var isShowingFileImporter = false
+    @State private var showClearConfirm = false
 
     private var currentPeer: PeerEntry {
         store.peers.first(where: { $0.peerID.value == peer.peerID.value }) ?? peer
@@ -70,6 +71,25 @@ struct ChatView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button(role: .destructive) {
+                        showClearConfirm = true
+                    } label: {
+                        Label("Очистить чат", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .confirmationDialog("Очистить историю переписки?", isPresented: $showClearConfirm, titleVisibility: .visible) {
+            Button("Очистить", role: .destructive) {
+                store.clearChat(peerID: peer.peerID.value)
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Все сообщения с \(currentPeer.nickname) будут удалены. Это действие нельзя отменить.")
         }
         .onChange(of: messages.count) { _ in
             store.markConversationRead(peerID: peer.peerID.value)

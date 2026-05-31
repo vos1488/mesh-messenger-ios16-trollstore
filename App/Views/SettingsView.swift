@@ -115,7 +115,7 @@ struct SettingsView: View {
                 }
 
                 Section("О приложении") {
-                    LabeledContent("Версия", value: "1.0 MVP")
+                    LabeledContent("Версия", value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
                     LabeledContent("Протокол", value: "MeshMessenger P2P")
                     LabeledContent("Транспорт", value: "Hybrid (MCP + UDP)")
                     LabeledContent("Шифрование", value: "AES-256-GCM + Ed25519")

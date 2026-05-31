@@ -600,6 +600,28 @@ public final class StorageEngine {
         })
     }
 
+    // MARK: - Delete
+
+    /// Delete all chat messages for a given peerID.
+    public func deleteMessages(peerID: String) throws {
+        #if canImport(SQLite3)
+        let sql = "DELETE FROM ChatMessages WHERE peer_id = ?;"
+        try executePrepared(sql: sql) { statement in
+            bindText(statement: statement, index: 1, value: peerID)
+        }
+        #endif
+    }
+
+    /// Delete a peer record entirely (does not remove messages).
+    public func deletePeer(peerID: String) throws {
+        #if canImport(SQLite3)
+        let sql = "DELETE FROM ChatPeers WHERE peer_id = ?;"
+        try executePrepared(sql: sql) { statement in
+            bindText(statement: statement, index: 1, value: peerID)
+        }
+        #endif
+    }
+
     public func upsertRatchetSession(_ session: StoredRatchetSession) throws {
         let sql = """
         INSERT INTO RatchetSessions(

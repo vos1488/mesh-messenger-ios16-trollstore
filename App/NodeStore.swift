@@ -409,6 +409,25 @@ public final class NodeStore: ObservableObject {
         }
     }
 
+    // MARK: - Clear chat
+
+    public func clearChat(peerID: String) {
+        messages[peerID] = []
+        // Remove from knownMessageIDs so messages can be re-received if needed
+        // (keep peer entry, just wipe messages)
+        try? storageEngine?.deleteMessages(peerID: peerID)
+    }
+
+    // MARK: - Remove peer
+
+    /// Remove a peer and all its messages from memory and DB.
+    public func removePeer(peerID: String) {
+        peers.removeAll { $0.peerID.value == peerID }
+        messages.removeValue(forKey: peerID)
+        try? storageEngine?.deleteMessages(peerID: peerID)
+        try? storageEngine?.deletePeer(peerID: peerID)
+    }
+
     public func markConversationRead(peerID: String) {
         guard let storageEngine else { return }
         let readAt = Date()
@@ -1480,7 +1499,10 @@ public final class NodeStore: ObservableObject {
         knownMessageIDs.removeAll()
 
         let storedPeers = (try? storageEngine.fetchChatPeers()) ?? []
-        peers = storedPeers.map { row in
+        // Deduplicate by peerID (keep the most recently seen entry)
+        var seenPeerIDs = Set<String>()
+        let uniqueStoredPeers = storedPeers.filter { seenPeerIDs.insert($0.peerID).inserted }
+        peers = uniqueStoredPeers.map { row in
             var peer = PeerEntry(
                 peerID: PeerID(row.peerID),
                 nickname: row.nickname,
