@@ -182,8 +182,10 @@ public final class NodeStore: ObservableObject {
     private var incomingFileNames: [UUID: String] = [:]
     private var currentScenePhase: ScenePhase = .active
     private var lastHeartbeatAt: Date = .distantPast
+    private var isStartingNode = false
     private let maxDeliveryAttempts = 8
     private let maxMessagesPerPeerInMemory = 2000
+    private let maxMessagesPerPeerOnStartup = 600
 
     public static let shared = NodeStore()
     private init() {}
@@ -191,7 +193,9 @@ public final class NodeStore: ObservableObject {
     // MARK: - Lifecycle
 
     public func start() async {
-        guard !isRunning else { return }
+        guard !isRunning, !isStartingNode else { return }
+        isStartingNode = true
+        defer { isStartingNode = false }
         let savedNick = UserDefaults.standard.string(forKey: "mesh_nickname") ?? nickname
 
         do {
@@ -201,6 +205,7 @@ public final class NodeStore: ObservableObject {
 
             let storage = try StorageEngine(databaseURL: meshDBURL())
             try storage.bootstrapSchema()
+            try storage.recoverOutgoingOutbox(now: Date())
 
             identityEngine = identity
             storageEngine = storage
@@ -220,6 +225,7 @@ public final class NodeStore: ObservableObject {
                 agreementPublicKey: identity.identity.agreementPublicKey,
                 wanBootstrapEndpoints: parseWANEndpoints(from: wanBootstrapRaw)
             )
+            runStartupSmokeCheck(storage: storage, transport: t)
 
             t.onPeerDiscovered = { [weak self] discovered in
                 Task { @MainActor [weak self] in
@@ -274,8 +280,7 @@ public final class NodeStore: ObservableObject {
             errorMessage = nil
             appendDebug("node", "node started as \(myPeerIDValue.prefix(8))")
         } catch {
-            errorMessage = error.localizedDescription
-            appendDebug("error", "start failed: \(error.localizedDescription)")
+            reportError(domain: "startup", userPrefix: "Ошибка запуска", error: error, surfaceToUser: true)
         }
     }
 
@@ -319,6 +324,7 @@ public final class NodeStore: ObservableObject {
     }
 
     public func handleScenePhase(_ phase: ScenePhase) {
+        guard currentScenePhase != phase else { return }
         currentScenePhase = phase
         switch phase {
         case .active:
@@ -354,7 +360,7 @@ public final class NodeStore: ObservableObject {
                     )
                 }
             } catch {
-                errorMessage = "E2EE ошибка: \(error.localizedDescription)"
+                reportError(domain: "crypto", userPrefix: "E2EE ошибка", error: error, surfaceToUser: true)
             }
 
             let messageID = UUID()
@@ -467,7 +473,7 @@ public final class NodeStore: ObservableObject {
             }
             messages[peerID] = thread
 
-            if let latestRead = readIDs.last, let transport {
+            if let latestRead = readIDs.last {
                 let receipt = TransportMessage(
                     kind: .readReceipt,
                     senderPeerID: myPeerIDValue,
@@ -475,7 +481,14 @@ public final class NodeStore: ObservableObject {
                     receiverPeerID: peerID,
                     readForMessageID: latestRead
                 )
-                try? transport.send(message: receipt, to: PeerID(peerID))
+                Task { @MainActor [weak self] in
+                    await self?.sendControlMessageWithRetry(
+                        receipt,
+                        targetPeerID: peerID,
+                        attempts: 3,
+                        tag: "read receipt"
+                    )
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -483,7 +496,7 @@ public final class NodeStore: ObservableObject {
     }
 
     public func sendFile(at url: URL, to peer: PeerEntry) {
-        guard let transport, let storageEngine else { return }
+        guard let storageEngine else { return }
         Task { @MainActor in
             let hasSecurityScope = url.startAccessingSecurityScopedResource()
             defer {
@@ -507,7 +520,12 @@ public final class NodeStore: ObservableObject {
                     fileTotalChunks: chunks.count,
                     fileChecksum: first.fileHash
                 )
-                try transport.send(message: meta, to: peer.peerID)
+                try await sendTransportMessageWithRetry(
+                    meta,
+                    targetPeerID: peer.peerID.value,
+                    relayExcluding: Set([myPeerIDValue]),
+                    maxAttempts: 4
+                )
 
                 try storageEngine.upsertFileTransfer(
                     StoredFileTransferRecord(
@@ -537,7 +555,12 @@ public final class NodeStore: ObservableObject {
                         fileChunkData: chunk.data,
                         fileChecksum: chunk.fileHash
                     )
-                    try transport.send(message: chunkPacket, to: peer.peerID)
+                    try await sendTransportMessageWithRetry(
+                        chunkPacket,
+                        targetPeerID: peer.peerID.value,
+                        relayExcluding: Set([myPeerIDValue]),
+                        maxAttempts: 4
+                    )
                     let progress = Double(chunk.index + 1) / Double(chunks.count)
                     fileProgress[transferID] = progress
                     try storageEngine.upsertFileTransfer(
@@ -556,7 +579,7 @@ public final class NodeStore: ObservableObject {
                     )
                 }
             } catch {
-                errorMessage = "Файл не отправлен: \(error.localizedDescription)"
+                reportError(domain: "files", userPrefix: "Файл не отправлен", error: error, surfaceToUser: true)
             }
         }
     }
@@ -1079,7 +1102,6 @@ public final class NodeStore: ObservableObject {
     }
 
     private func sendAck(for messageID: UUID, to peerID: PeerID) {
-        guard let transport else { return }
         let ack = TransportMessage(
             kind: .ack,
             senderPeerID: myPeerIDValue,
@@ -1087,7 +1109,9 @@ public final class NodeStore: ObservableObject {
             receiverPeerID: peerID.value,
             ackForMessageID: messageID
         )
-        try? transport.send(message: ack, to: peerID)
+        Task { @MainActor [weak self] in
+            await self?.sendControlMessageWithRetry(ack, targetPeerID: peerID.value, attempts: 3, tag: "ack")
+        }
     }
 
     private func handleIncomingCallInvite(_ packet: TransportMessage, fromPeerID: PeerID, relayHopPeerID: PeerID) {
@@ -1252,7 +1276,7 @@ public final class NodeStore: ObservableObject {
     }
 
     private func attemptDelivery(_ record: StoredMessageRecord) {
-        guard let transport, let storageEngine else { return }
+        guard let storageEngine else { return }
         if record.attempts >= maxDeliveryAttempts {
             try? storageEngine.markMessageStatus(
                 messageID: record.messageID,
@@ -1296,13 +1320,11 @@ public final class NodeStore: ObservableObject {
         )
 
         do {
-            let target = PeerID(record.peerID)
-            if transport.isPeerConnected(target) {
-                try transport.send(message: packet, to: target)
-            } else {
-                let excluded = Set(record.relayPath)
-                try transport.sendToConnectedPeers(message: packet, excludingPeerIDs: excluded)
-            }
+            try sendTransportMessage(
+                packet,
+                targetPeerID: record.peerID,
+                relayExcluding: Set(record.relayPath)
+            )
 
             let attempts = record.attempts + 1
             let nextRetry = Date().addingTimeInterval(backoffSeconds(forAttempt: attempts))
@@ -1338,10 +1360,13 @@ public final class NodeStore: ObservableObject {
                 nextRetryAt: nextRetry,
                 error: error.localizedDescription
             )
-            appendDebug(
-                "delivery",
-                "\(poisoned ? "poisoned" : "retry") \(record.messageID.uuidString.prefix(8)) #\(attempts): \(error.localizedDescription)"
+            reportError(
+                domain: "network",
+                userPrefix: poisoned ? "Доставка остановлена" : "Проблема доставки",
+                error: error,
+                surfaceToUser: false
             )
+            appendDebug("delivery", "\(poisoned ? "poisoned" : "retry") \(record.messageID.uuidString.prefix(8)) #\(attempts)")
         }
     }
 
@@ -1410,27 +1435,13 @@ public final class NodeStore: ObservableObject {
 
     @discardableResult
     private func sendCallSignal(_ message: TransportMessage, targetPeerID: String) -> Bool {
-        guard let transport else { return false }
-        let target = PeerID(targetPeerID)
         do {
-            if transport.isPeerConnected(target) {
-                try transport.send(message: message, to: target)
-            } else {
-                do {
-                    try transport.send(message: message, to: target)
-                } catch {
-                    try transport.sendToConnectedPeers(message: message, excludingPeerIDs: [myPeerIDValue])
-                }
-            }
+            try sendTransportMessage(message, targetPeerID: targetPeerID, relayExcluding: Set([myPeerIDValue]))
             return true
         } catch {
-            do {
-                try transport.sendToConnectedPeers(message: message, excludingPeerIDs: [myPeerIDValue])
-                return true
-            } catch {
-                appendDebug("error", "call signal \(message.kind.rawValue) failed: \(error.localizedDescription)")
-                return false
-            }
+            reportError(domain: "network", userPrefix: "Сигнал звонка не отправлен", error: error, surfaceToUser: false)
+            appendDebug("call", "signal \(message.kind.rawValue) failed")
+            return false
         }
     }
 
@@ -1555,10 +1566,12 @@ public final class NodeStore: ObservableObject {
         }
 
         for peer in peers {
-            let rows = (try? storageEngine.fetchChatMessages(peerID: peer.peerID.value, limit: maxMessagesPerPeerInMemory)) ?? []
-            let mapped = rows.map(mapFromRecord)
+            let rows = (try? storageEngine.fetchChatMessages(peerID: peer.peerID.value, limit: maxMessagesPerPeerOnStartup)) ?? []
+            var seenMessageIDs = Set<UUID>()
+            let uniqueRows = rows.filter { seenMessageIDs.insert($0.messageID).inserted }
+            let mapped = uniqueRows.map(mapFromRecord)
             messages[peer.peerID.value] = mapped
-            for row in rows {
+            for row in uniqueRows {
                 knownMessageIDs.insert(row.messageID)
             }
         }
@@ -1643,7 +1656,7 @@ public final class NodeStore: ObservableObject {
     }
 
     private func sendLatestReadReceipt(to peerID: String) {
-        guard let storageEngine, let transport else { return }
+        guard let storageEngine else { return }
         guard let messageID = try? storageEngine.latestReadIncomingMessageID(peerID: peerID) else { return }
         let receipt = TransportMessage(
             kind: .readReceipt,
@@ -1652,7 +1665,9 @@ public final class NodeStore: ObservableObject {
             receiverPeerID: peerID,
             readForMessageID: messageID
         )
-        try? transport.send(message: receipt, to: PeerID(peerID))
+        Task { @MainActor [weak self] in
+            await self?.sendControlMessageWithRetry(receipt, targetPeerID: peerID, attempts: 3, tag: "read receipt")
+        }
     }
 
     private func parseWANEndpoints(from raw: String) -> [String] {
@@ -1660,6 +1675,98 @@ public final class NodeStore: ObservableObject {
             .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == ";" })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    private func runStartupSmokeCheck(storage: StorageEngine, transport: HybridTransport) {
+        if myPeerIDValue.isEmpty || !myPeerURI.hasPrefix("peer://") {
+            appendDebug("startup", "invalid local identity")
+        }
+        do {
+            _ = try storage.fetchChatPeers()
+        } catch {
+            reportError(domain: "storage", userPrefix: "Smoke-check БД", error: error, surfaceToUser: false)
+        }
+        let updateURL = UpdateChecker.shared.manifestURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !updateURL.isEmpty, URL(string: updateURL) == nil {
+            appendDebug("startup", "invalid update manifest URL")
+        }
+        _ = transport.connectedPeerIDs()
+        appendDebug("startup", "smoke-check passed")
+    }
+
+    private func sendTransportMessage(
+        _ message: TransportMessage,
+        targetPeerID: String,
+        relayExcluding: Set<String>
+    ) throws {
+        guard let transport else { throw TransportError.peerNotConnected }
+        let target = PeerID(targetPeerID)
+        if transport.isPeerConnected(target) {
+            try transport.send(message: message, to: target)
+            return
+        }
+        do {
+            try transport.send(message: message, to: target)
+        } catch {
+            try transport.sendToConnectedPeers(
+                message: message,
+                excludingPeerIDs: relayExcluding.union(message.relayPath)
+            )
+        }
+    }
+
+    private func sendTransportMessageWithRetry(
+        _ message: TransportMessage,
+        targetPeerID: String,
+        relayExcluding: Set<String>,
+        maxAttempts: Int
+    ) async throws {
+        let attempts = max(1, maxAttempts)
+        var lastError: Error?
+        for attempt in 1...attempts {
+            do {
+                try sendTransportMessage(message, targetPeerID: targetPeerID, relayExcluding: relayExcluding)
+                return
+            } catch {
+                lastError = error
+                guard attempt < attempts else { break }
+                let delaySeconds = min(6.0, max(0.25, backoffSeconds(forAttempt: attempt) / 4.0))
+                try await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+            }
+        }
+        throw lastError ?? TransportError.peerNotConnected
+    }
+
+    private func sendControlMessageWithRetry(
+        _ message: TransportMessage,
+        targetPeerID: String,
+        attempts: Int,
+        tag: String
+    ) async {
+        do {
+            try await sendTransportMessageWithRetry(
+                message,
+                targetPeerID: targetPeerID,
+                relayExcluding: Set([myPeerIDValue]),
+                maxAttempts: attempts
+            )
+        } catch is CancellationError {
+            return
+        } catch {
+            reportError(domain: "network", userPrefix: "Не отправлен \(tag)", error: error, surfaceToUser: false)
+        }
+    }
+
+    private func reportError(
+        domain: String,
+        userPrefix: String,
+        error: Error,
+        surfaceToUser: Bool
+    ) {
+        appendDebug("error", "[\(domain)] \(userPrefix): \(error.localizedDescription)")
+        if surfaceToUser {
+            errorMessage = "\(userPrefix): \(error.localizedDescription)"
+        }
     }
 
     private func resetCallControls() {

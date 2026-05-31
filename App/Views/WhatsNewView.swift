@@ -6,10 +6,10 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
-        ("arrow.down.circle.fill", .blue,   "Авто-обновления",    "Приложение теперь умеет проверять и скачивать новые версии прямо внутри себя — без AppStore."),
-        ("network",               .green,  "Публичный репо",     "Исходный код открыт. Обновления качаются с GitHub без токена и без авторизации."),
-        ("lock.shield.fill",      .purple, "E2EE без изменений", "Шифрование X25519 + AES-256-GCM и подписи Ed25519 работают как прежде."),
-        ("antenna.radiowaves.left.and.right", .orange, "Mesh-сеть", "Relay-движок, DHT Kademlia и store-and-forward стабильнее при слабом сигнале."),
+        ("checkmark.shield.fill", .blue,   "Stage 1 завершён",   "Закрыты ключевые задачи стабилизации ядра и усилена надёжность доставки."),
+        ("arrow.clockwise.circle.fill", .green, "Надёжная доставка", "Единый retry/backoff для сообщений, файлов, ACK и read-receipt при потере маршрута."),
+        ("bolt.horizontal.circle.fill", .orange, "Быстрый старт", "Оптимизирован cold start, снижена нагрузка discovery, добавлен startup smoke-check."),
+        ("bubble.left.and.bubble.right.fill", .purple, "Чаты без дублей", "После перезапуска чаты и outbox восстанавливаются корректно без дублей."),
     ]
 
     var body: some View {
@@ -111,5 +111,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.1")
+    WhatsNewView(version: "1.3")
 }

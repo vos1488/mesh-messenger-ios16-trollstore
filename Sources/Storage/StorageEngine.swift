@@ -464,6 +464,19 @@ public final class StorageEngine {
         })
     }
 
+    public func recoverOutgoingOutbox(now: Date) throws {
+        let sql = """
+        UPDATE ChatMessages
+        SET status = 'pending',
+            next_retry_at = ?
+        WHERE is_outgoing = 1
+          AND status IN ('queued', 'pending', 'sent', 'failed');
+        """
+        try executePrepared(sql: sql) { statement in
+            bindDouble(statement: statement, index: 1, value: now.timeIntervalSince1970)
+        }
+    }
+
     public func hasMessage(messageID: UUID) throws -> Bool {
         let sql = "SELECT 1 FROM ChatMessages WHERE message_id = ? LIMIT 1;"
         let rows: [Int] = try queryPrepared(sql: sql, binder: { statement in
