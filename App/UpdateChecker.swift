@@ -16,9 +16,9 @@ public enum InstallerType: String {
     public var installInstructions: String {
         switch self {
         case .trollstore:
-            return "Нажмите «Установить» — TrollStore установит обновление автоматически."
+            return "Обновление скачивается через GitHub API (закрытый репозиторий), затем передаётся в TrollStore."
         case .esign, .unknown:
-            return "Нажмите «Скачать» — откроется браузер. Скачайте IPA и откройте его в ESign / GBox для переподписи и установки."
+            return "Обновление скачивается через GitHub API (закрытый репозиторий), затем открывается меню «Поделиться» для ESign / GBox."
         }
     }
 }
@@ -35,6 +35,8 @@ public final class UpdateChecker: ObservableObject {
     @Published public var downloadURL: URL?
     @Published public var releasePageURL: URL?
     @Published public var isChecking = false
+    @Published public var isInstallingUpdate = false
+    @Published public var installStatusText: String?
     @Published public var lastCheckError: String?
     @Published public var lastCheckedAt: Date?
 
@@ -53,6 +55,10 @@ public final class UpdateChecker: ObservableObject {
     private static let manifestURLKey   = "mesh.update.manifestURL"
     private static let githubTokenKey   = "mesh.update.githubToken"
     private static let lastCheckTimeKey = "mesh.update.lastCheckAt"
+    private static let defaultIPAName   = "MeshMessenger-TrollStore-unsigned.ipa"
+
+    private var updateAssetAPIURL: URL?
+    private var updateAssetName: String = defaultIPAName
 
     public var manifestURL: String {
         get {
@@ -128,7 +134,9 @@ public final class UpdateChecker: ObservableObject {
                 case 401, 403:
                     lastCheckError = "Требуется GitHub Token (настройки → Обновления)"
                 case 404:
-                    lastCheckError = "Репозиторий или релиз не найден"
+                    lastCheckError = githubToken.isEmpty
+                        ? "Для закрытого репозитория добавьте GitHub Token (Contents: Read)"
+                        : "Репозиторий или релиз не найден"
                 default:
                     lastCheckError = "HTTP \(http.statusCode)"
                 }
@@ -149,6 +157,10 @@ public final class UpdateChecker: ObservableObject {
             throw UpdateError.invalidJSON
         }
 
+        updateAssetAPIURL = nil
+        updateAssetName = Self.defaultIPAName
+        downloadURL = nil
+
         // GitHub Releases API
         if let tagName = json["tag_name"] as? String {
             let remote = tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
@@ -162,14 +174,26 @@ public final class UpdateChecker: ObservableObject {
             // Find the IPA asset
             if let assets = json["assets"] as? [[String: Any]] {
                 for asset in assets {
-                    if let name = asset["name"] as? String, name.hasSuffix(".ipa"),
-                       let urlStr = asset["browser_download_url"] as? String {
-                        downloadURL = URL(string: urlStr)
+                    guard let name = asset["name"] as? String, name.hasSuffix(".ipa") else { continue }
+                    updateAssetName = name
+                    if let apiURLString = asset["url"] as? String {
+                        updateAssetAPIURL = URL(string: apiURLString)
+                    }
+                    if let browserURLString = asset["browser_download_url"] as? String {
+                        downloadURL = URL(string: browserURLString)
+                    }
+                    if let assetID = asset["id"] as? Int {
+                        let fallbackAPI = "https://api.github.com/repos/vos1488/mesh-messenger-ios16-trollstore/releases/assets/\(assetID)"
+                        updateAssetAPIURL = updateAssetAPIURL ?? URL(string: fallbackAPI)
+                    }
+                    if updateAssetAPIURL != nil || downloadURL != nil {
                         break
                     }
                 }
             }
-            if downloadURL == nil { downloadURL = releasePageURL }
+            if updateAssetAPIURL == nil && downloadURL == nil {
+                throw UpdateError.ipaAssetNotFound
+            }
 
             isUpdateAvailable = isNewer(remote, than: currentVersion)
             return
@@ -203,32 +227,167 @@ public final class UpdateChecker: ObservableObject {
     // MARK: - Install / open
 
     public func triggerInstall() {
+        Task { [weak self] in
+            await self?.downloadAndInstallUpdate()
+        }
+    }
+
+    public func downloadAndInstallUpdate() async {
+        guard !isInstallingUpdate else { return }
+        guard isUpdateAvailable else {
+            lastCheckError = "Новых обновлений пока нет"
+            return
+        }
+
+        let source = updateAssetAPIURL ?? downloadURL
+        guard let source else {
+            lastCheckError = "Не найден IPA-ассет релиза"
+            return
+        }
+
+        isInstallingUpdate = true
+        lastCheckError = nil
+        installStatusText = "Скачиваем IPA…"
+        defer {
+            isInstallingUpdate = false
+            installStatusText = nil
+        }
+
+        do {
+            let localIPA = try await downloadIPA(from: source)
+            installStatusText = "Открываем установщик…"
+            presentInstaller(for: localIPA)
+        } catch let error as UpdateError {
+            lastCheckError = error.localizedDescription
+        } catch {
+            lastCheckError = error.localizedDescription
+        }
+    }
+
+    private func downloadIPA(from sourceURL: URL) async throws -> URL {
+        var request = URLRequest(url: sourceURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 180)
+        request.setValue("MeshMessenger/\(currentVersion) iOS-UpdateInstaller", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
+
+        if shouldUseGitHubAuth(for: sourceURL) {
+            guard !githubToken.isEmpty else { throw UpdateError.missingTokenForPrivateRepo }
+            request.setValue("Bearer \(githubToken)", forHTTPHeaderField: "Authorization")
+        }
+
+        let (tempURL, response) = try await URLSession.shared.download(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw UpdateError.invalidServerResponse
+        }
+        guard (200...299).contains(http.statusCode) else {
+            switch http.statusCode {
+            case 401, 403:
+                throw UpdateError.missingTokenForPrivateRepo
+            case 404:
+                throw UpdateError.ipaAssetNotFound
+            default:
+                throw UpdateError.httpError(http.statusCode)
+            }
+        }
+
+        let fileName = sanitizedFileName(updateAssetName)
+        let destination = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.moveItem(at: tempURL, to: destination)
+        return destination
+    }
+
+    private func shouldUseGitHubAuth(for url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        if host == "api.github.com" { return true }
+        if host == "github.com", url.path.contains("/releases/") { return true }
+        if host.contains("githubusercontent.com"), !githubToken.isEmpty {
+            return true
+        }
+        return false
+    }
+
+    private func sanitizedFileName(_ name: String) -> String {
+        let forbidden = CharacterSet(charactersIn: "\\/:*?\"<>|")
+        let parts = name.components(separatedBy: forbidden)
+        let cleaned = parts.joined(separator: "_")
+        return cleaned.isEmpty ? Self.defaultIPAName : cleaned
+    }
+
+    private func presentInstaller(for localIPA: URL) {
 #if canImport(UIKit)
-        guard let url = downloadURL else { return }
-        switch installerType {
-        case .trollstore:
-            // Try TrollStore URL scheme first
-            let encoded = url.absoluteString
+        if installerType == .trollstore {
+            let encoded = localIPA.absoluteString
                 .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
             if let tsURL = URL(string: "apple-magnifier://install?url=\(encoded)"),
                UIApplication.shared.canOpenURL(tsURL) {
                 UIApplication.shared.open(tsURL)
-            } else {
-                UIApplication.shared.open(url)
+                return
             }
-        case .esign, .unknown:
-            // Open release page / IPA URL in Safari; user imports into their tool
-            UIApplication.shared.open(url)
         }
+        presentShareSheet(for: localIPA)
 #endif
     }
+
+#if canImport(UIKit)
+    private func presentShareSheet(for localIPA: URL) {
+        guard let presenter = topMostViewController() else {
+            lastCheckError = "Не удалось открыть меню установки"
+            return
+        }
+
+        let activity = UIActivityViewController(activityItems: [localIPA], applicationActivities: nil)
+        if let popover = activity.popoverPresentationController {
+            popover.sourceView = presenter.view
+            popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
+        }
+        presenter.present(activity, animated: true)
+    }
+
+    private func topMostViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let windows = scenes.flatMap { $0.windows }
+        let root = windows.first(where: \.isKeyWindow)?.rootViewController
+        return traverseTop(from: root)
+    }
+
+    private func traverseTop(from controller: UIViewController?) -> UIViewController? {
+        if let nav = controller as? UINavigationController {
+            return traverseTop(from: nav.visibleViewController)
+        }
+        if let tab = controller as? UITabBarController {
+            return traverseTop(from: tab.selectedViewController)
+        }
+        if let presented = controller?.presentedViewController {
+            return traverseTop(from: presented)
+        }
+        return controller
+    }
+#endif
 
     // MARK: - Errors
 
     enum UpdateError: LocalizedError {
         case invalidJSON
+        case missingTokenForPrivateRepo
+        case ipaAssetNotFound
+        case invalidServerResponse
+        case httpError(Int)
+
         var errorDescription: String? {
-            switch self { case .invalidJSON: return "Не удалось разобрать ответ сервера" }
+            switch self {
+            case .invalidJSON:
+                return "Не удалось разобрать ответ сервера"
+            case .missingTokenForPrivateRepo:
+                return "Нужен GitHub Token с правом Contents: Read для закрытого репозитория"
+            case .ipaAssetNotFound:
+                return "IPA-файл не найден в последнем релизе"
+            case .invalidServerResponse:
+                return "Некорректный ответ сервера обновлений"
+            case .httpError(let status):
+                return "Ошибка загрузки IPA (HTTP \(status))"
+            }
         }
     }
 }

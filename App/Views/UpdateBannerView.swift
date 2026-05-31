@@ -25,7 +25,7 @@ struct UpdateBannerView: View {
 
                     Spacer()
 
-                    Button(checker.installerType == .trollstore ? "Установить" : "Скачать") {
+                    Button(checker.isInstallingUpdate ? "Загрузка…" : (checker.installerType == .trollstore ? "Установить" : "Скачать")) {
                         checker.triggerInstall()
                     }
                     .font(.caption.bold())
@@ -33,6 +33,7 @@ struct UpdateBannerView: View {
                     .padding(.vertical, 6)
                     .background(.white.opacity(0.2), in: Capsule())
                     .foregroundStyle(.white)
+                    .disabled(checker.isInstallingUpdate)
 
                     if checker.releaseNotes?.isEmpty == false {
                         Button {
@@ -70,6 +71,15 @@ struct UpdateBannerView: View {
             .shadow(color: .blue.opacity(0.35), radius: 10, x: 0, y: 5)
             .padding(.horizontal, 16)
             .padding(.top, 8)
+            .overlay(alignment: .bottomLeading) {
+                if let status = checker.installStatusText, checker.isInstallingUpdate {
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.9))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                }
+            }
             .transition(.asymmetric(
                 insertion: .move(edge: .top).combined(with: .opacity),
                 removal: .move(edge: .top).combined(with: .opacity)
@@ -142,10 +152,17 @@ struct UpdateSettingsSection: View {
             .disabled(checker.isChecking)
 
             if checker.isUpdateAvailable {
-                Button(checker.installerType == .trollstore ? "Установить обновление" : "Скачать обновление") {
+                Button(checker.isInstallingUpdate ? "Загрузка IPA…" : (checker.installerType == .trollstore ? "Установить обновление" : "Скачать обновление")) {
                     checker.triggerInstall()
                 }
                 .foregroundStyle(.blue)
+                .disabled(checker.isInstallingUpdate)
+            }
+
+            if let status = checker.installStatusText, checker.isInstallingUpdate {
+                Label(status, systemImage: "arrow.down.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             // GitHub token input
