@@ -89,15 +89,19 @@ struct PeerListView: View {
     }
 
     private var myIDCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(store.nickname, systemImage: "person.circle.fill")
-                .font(.headline)
-            if !store.myPeerURI.isEmpty {
-                Text(store.myPeerURI)
-                    .font(.system(.caption2, design: .monospaced))
-                    .textSelection(.enabled)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+        HStack(spacing: 12) {
+            // My own avatar — derived from my peerID so it's always consistent
+            PeerAvatarView(peerID: store.myPeerURI, size: 44, isConnected: store.isRunning)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(store.nickname)
+                    .font(.headline)
+                if !store.myPeerURI.isEmpty {
+                    Text(store.myPeerURI)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
         }
         .padding(.vertical, 4)
@@ -121,18 +125,7 @@ struct PeerRowView: View {
 
     var body: some View {
         HStack {
-            ZStack(alignment: .bottomTrailing) {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.15))
-                    .frame(width: 44, height: 44)
-                Text(String(peer.nickname.prefix(1)).uppercased())
-                    .font(.headline)
-                    .foregroundStyle(Color.accentColor)
-                Circle()
-                    .fill(peer.isConnected ? .green : .gray)
-                    .frame(width: 12, height: 12)
-                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
-            }
+            PeerAvatarView(peerID: peer.peerID.value, size: 44, isConnected: peer.isConnected)
             VStack(alignment: .leading, spacing: 2) {
                 Text(peer.nickname)
                     .font(.headline)

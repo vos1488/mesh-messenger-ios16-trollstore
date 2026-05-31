@@ -51,24 +51,21 @@ struct ChatView: View {
             Divider()
             inputBar
         }
-        .navigationTitle(currentPeer.nickname)
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 8) {
+                    PeerAvatarView(peerID: currentPeer.peerID.value, size: 32, isConnected: currentPeer.isConnected)
+                    Text(currentPeer.nickname)
+                        .font(.headline)
+                }
+            }
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
                     store.startVoiceCall(to: currentPeer)
                 } label: {
                     Image(systemName: "phone.fill")
-                }
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(currentPeer.isConnected ? .green : .gray)
-                        .frame(width: 8, height: 8)
-                    Text(currentPeer.isConnected ? "Онлайн" : "Офлайн")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
