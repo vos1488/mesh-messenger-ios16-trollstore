@@ -183,6 +183,7 @@ public final class NodeStore: ObservableObject {
     private var currentScenePhase: ScenePhase = .active
     private var lastHeartbeatAt: Date = .distantPast
     private let maxDeliveryAttempts = 8
+    private let maxMessagesPerPeerInMemory = 2000
 
     public static let shared = NodeStore()
     private init() {}
@@ -412,20 +413,43 @@ public final class NodeStore: ObservableObject {
     // MARK: - Clear chat
 
     public func clearChat(peerID: String) {
+        let removedIDs = Set((messages[peerID] ?? []).map(\.id))
+        knownMessageIDs.subtract(removedIDs)
         messages[peerID] = []
-        // Remove from knownMessageIDs so messages can be re-received if needed
-        // (keep peer entry, just wipe messages)
-        try? storageEngine?.deleteMessages(peerID: peerID)
+        guard let storageEngine else { return }
+        do {
+            try storageEngine.deleteMessages(peerID: peerID)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    public func clearAllChats() {
+        messages.removeAll()
+        knownMessageIDs.removeAll()
+        guard let storageEngine else { return }
+        do {
+            try storageEngine.deleteAllMessages()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     // MARK: - Remove peer
 
     /// Remove a peer and all its messages from memory and DB.
     public func removePeer(peerID: String) {
+        let removedIDs = Set((messages[peerID] ?? []).map(\.id))
+        knownMessageIDs.subtract(removedIDs)
         peers.removeAll { $0.peerID.value == peerID }
         messages.removeValue(forKey: peerID)
-        try? storageEngine?.deleteMessages(peerID: peerID)
-        try? storageEngine?.deletePeer(peerID: peerID)
+        guard let storageEngine else { return }
+        do {
+            try storageEngine.deleteMessages(peerID: peerID)
+            try storageEngine.deletePeer(peerID: peerID)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     public func markConversationRead(peerID: String) {
@@ -1519,7 +1543,7 @@ public final class NodeStore: ObservableObject {
         }
 
         for peer in peers {
-            let rows = (try? storageEngine.fetchChatMessages(peerID: peer.peerID.value, limit: 2000)) ?? []
+            let rows = (try? storageEngine.fetchChatMessages(peerID: peer.peerID.value, limit: maxMessagesPerPeerInMemory)) ?? []
             let mapped = rows.map(mapFromRecord)
             messages[peer.peerID.value] = mapped
             for row in rows {
@@ -1581,6 +1605,9 @@ public final class NodeStore: ObservableObject {
         } else {
             thread.append(message)
             thread.sort { $0.timestamp < $1.timestamp }
+            if thread.count > maxMessagesPerPeerInMemory {
+                thread.removeFirst(thread.count - maxMessagesPerPeerInMemory)
+            }
         }
         messages[peerID] = thread
     }

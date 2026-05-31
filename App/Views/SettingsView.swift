@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var editedNickname = ""
     @State private var wanBootstrap = ""
     @State private var showQRScanner = false
+    @State private var showClearAllChatsConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -122,6 +123,12 @@ struct SettingsView: View {
                     LabeledContent("DHT", value: "Kademlia")
                 }
 
+                Section("Чаты") {
+                    Button("Очистить все чаты", role: .destructive) {
+                        showClearAllChatsConfirm = true
+                    }
+                }
+
                 UpdateSettingsSection()
             }
             .navigationTitle("Настройки")
@@ -146,6 +153,14 @@ struct SettingsView: View {
                     store.connectWebSession(from: value)
                     showQRScanner = false
                 }
+            }
+            .confirmationDialog("Очистить все чаты?", isPresented: $showClearAllChatsConfirm, titleVisibility: .visible) {
+                Button("Очистить все", role: .destructive) {
+                    store.clearAllChats()
+                }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Будут удалены все сообщения со всеми собеседниками. Это действие нельзя отменить.")
             }
         }
     }

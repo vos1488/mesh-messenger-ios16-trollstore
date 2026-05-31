@@ -612,6 +612,14 @@ public final class StorageEngine {
         #endif
     }
 
+    /// Delete all chat messages across all peers.
+    public func deleteAllMessages() throws {
+        #if canImport(SQLite3)
+        let sql = "DELETE FROM ChatMessages;"
+        try execute(sql: sql)
+        #endif
+    }
+
     /// Delete a peer record entirely (does not remove messages).
     public func deletePeer(peerID: String) throws {
         #if canImport(SQLite3)
