@@ -59,7 +59,7 @@ public enum PeerAvatar {
     /// Deterministically pick a background color for a given peerID string.
     public static func color(for peerID: String) -> Color {
         // Use a different hash slice so color and emoji are independent
-        let h = stableHash(peerID &+ "color")
+        let h = stableHash(peerID + "color")
         return backgroundColors[Int(h % UInt64(backgroundColors.count))]
     }
 
