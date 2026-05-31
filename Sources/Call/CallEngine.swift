@@ -59,6 +59,8 @@ public final class MCStreamCallEngine: CallEngine {
     private var activePeerID: PeerID?
     private var pendingInputPeerID: PeerID?
     private let maxFramePayloadBytes = 4096
+    /// Guards readAudioFromStream against accessing audio objects after teardown.
+    private var isReceivingActive = false
 
     public init() {}
 
@@ -119,23 +121,27 @@ public final class MCStreamCallEngine: CallEngine {
         state = .active
     }
 
-    // Called from NodeStore when the remote peer opens an audio stream to us
+    // Called from NodeStore when the remote peer opens an audio stream to us.
+    // May be called from any thread (MCSession delegate is background); dispatch to main.
     public func handleIncomingAudioStream(_ stream: InputStream, from peerID: PeerID) {
-        if let expected = activePeerID, expected.value != peerID.value {
-            stream.close()
-            return
-        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { stream.close(); return }
+            if let expected = self.activePeerID, expected.value != peerID.value {
+                stream.close()
+                return
+            }
 #if canImport(AVFoundation)
-        if let engine = audioEngine, engine.isRunning {
-            startReceiving(stream: stream, from: peerID)
-        } else {
-            pendingInputStream = stream
-            pendingInputPeerID = peerID
-        }
+            if let engine = self.audioEngine, engine.isRunning {
+                self.startReceiving(stream: stream, from: peerID)
+            } else {
+                self.pendingInputStream = stream
+                self.pendingInputPeerID = peerID
+            }
 #else
-        pendingInputStream = stream
-        pendingInputPeerID = peerID
+            self.pendingInputStream = stream
+            self.pendingInputPeerID = peerID
 #endif
+        }
     }
 
     public func endCall() async {
@@ -191,6 +197,11 @@ public final class MCStreamCallEngine: CallEngine {
     }
 
     private func startReceiving(stream: InputStream, from peerID: PeerID) {
+        // Invalidate timer FIRST — before touching receiveAccumulator — to prevent
+        // the timer callback from racing with the removeAll below.
+        isReceivingActive = false
+        streamReadTimer?.invalidate()
+        streamReadTimer = nil
         activePeerID = peerID
         inputStream?.close()
         inputStream = stream
@@ -199,8 +210,7 @@ public final class MCStreamCallEngine: CallEngine {
 #endif
         stream.schedule(in: .main, forMode: .common)
         stream.open()
-
-        streamReadTimer?.invalidate()
+        isReceivingActive = true
         let timer = Timer(timeInterval: 0.02, repeats: true) { [weak self] _ in
             self?.readAudioFromStream()
         }
@@ -210,6 +220,7 @@ public final class MCStreamCallEngine: CallEngine {
 
     private func readAudioFromStream() {
 #if canImport(AVFoundation)
+        guard isReceivingActive else { return }
         guard let stream = inputStream, stream.hasBytesAvailable,
               let player = playerNode,
               let engine = audioEngine, engine.isRunning,
@@ -222,6 +233,12 @@ public final class MCStreamCallEngine: CallEngine {
         guard count > 0 else { return }
         receiveAccumulator.append(contentsOf: buf.prefix(count))
 
+        // Discard if accumulator grows unreasonably large (corrupt stream)
+        if receiveAccumulator.count > 131_072 {
+            receiveAccumulator.removeAll(keepingCapacity: true)
+            return
+        }
+
         while receiveAccumulator.count >= 2 {
             let payloadSize = (Int(receiveAccumulator[0]) << 8) | Int(receiveAccumulator[1])
             guard payloadSize > 0, payloadSize <= maxFramePayloadBytes else {
@@ -233,7 +250,11 @@ public final class MCStreamCallEngine: CallEngine {
 
             let payload = Data(receiveAccumulator[2..<totalFrameSize])
             receiveAccumulator.removeFirst(totalFrameSize)
-            enqueuePlaybackPayload(payload, wireFormat: callWireFormat, outputFormat: outFormat, converter: converter, player: player)
+            // Re-check audio engine is still valid before scheduling playback
+            guard isReceivingActive,
+                  let liveEngine = audioEngine, liveEngine.isRunning,
+                  let livePlayer = playerNode else { return }
+            enqueuePlaybackPayload(payload, wireFormat: callWireFormat, outputFormat: outFormat, converter: converter, player: livePlayer)
         }
 #endif
     }
@@ -318,8 +339,13 @@ public final class MCStreamCallEngine: CallEngine {
         wireBuffer.frameLength = AVAudioFrameCount(frameCount)
         copyPayload(payload, to: wireBuffer)
 
-        let ratio = outputFormat.sampleRate / max(1, wireFormat.sampleRate)
-        let outCapacity = AVAudioFrameCount(Double(wireBuffer.frameLength) * ratio) + 64
+        let wireSR = max(1.0, wireFormat.sampleRate)
+        let outSR = outputFormat.sampleRate
+        guard outSR.isFinite, outSR > 0 else { return }
+        let ratio = outSR / wireSR
+        let rawCapacity = Double(wireBuffer.frameLength) * ratio + 64.0
+        guard rawCapacity.isFinite, rawCapacity > 0, rawCapacity <= Double(UInt32.max / 2) else { return }
+        let outCapacity = AVAudioFrameCount(rawCapacity)
         guard outCapacity > 0,
               let outBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outCapacity) else { return }
 
@@ -371,6 +397,8 @@ public final class MCStreamCallEngine: CallEngine {
 
     @MainActor
     private func teardownAudio() {
+        // Disable timer callback guard FIRST to stop readAudioFromStream from processing
+        isReceivingActive = false
         streamReadTimer?.invalidate()
         streamReadTimer = nil
 #if canImport(AVFoundation)
