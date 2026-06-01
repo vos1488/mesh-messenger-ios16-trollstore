@@ -6,6 +6,8 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("arrowshape.turn.up.left.fill", .mint, "Reply-to сообщения", "Теперь можно ответить на конкретное сообщение прямо из контекстного меню bubble."),
+        ("arrowshape.turn.up.right.fill", .indigo, "Пересылка между чатами", "Добавлена пересылка сообщения в другой диалог через встроенный picker контактов."),
         ("slider.horizontal.3", .blue, "Управление чатами", "Добавлены mute, pin, archive и mark unread прямо из списка и экрана диалога."),
         ("clock.arrow.trianglehead.counterclockwise.rotate.90", .orange, "Умная история", "История подгружается батчами при прокрутке вверх, без резких скачков UI."),
         ("magnifyingglass.circle.fill", .green, "Поиск и фильтры", "Поиск по фразам с фильтрами по типу сообщений и периоду времени."),
@@ -112,5 +114,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.4.1")
+    WhatsNewView(version: "1.4.2")
 }

@@ -29,6 +29,8 @@ struct ChatView: View {
     @State private var searchDate: SearchDateFilter = .all
     @State private var visibleLimit = 80
     @State private var isLoadingOlderBatch = false
+    @State private var replyingToMessage: ChatMessage?
+    @State private var forwardingMessage: ChatMessage?
 
     private let pageSize = 80
 
@@ -89,6 +91,16 @@ struct ChatView: View {
         filteredMessages.filter { !$0.isMe && !$0.isRead }.count
     }
 
+    private var forwardCandidates: [PeerEntry] {
+        store.peers
+            .filter { $0.peerID.value != peer.peerID.value }
+            .sorted { a, b in
+                let aLast = store.messages[a.peerID.value]?.last?.timestamp ?? a.lastSeen
+                let bLast = store.messages[b.peerID.value]?.last?.timestamp ?? b.lastSeen
+                return aLast > bLast
+            }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if let active = store.activeCall, active.peerID == peer.peerID.value {
@@ -133,6 +145,16 @@ struct ChatView: View {
                                 MessageBubble(message: msg)
                                     .id(msg.id)
                                     .contextMenu {
+                                        Button {
+                                            replyingToMessage = msg
+                                        } label: {
+                                            Label("Ответить", systemImage: "arrowshape.turn.up.left")
+                                        }
+                                        Button {
+                                            forwardingMessage = msg
+                                        } label: {
+                                            Label("Переслать", systemImage: "arrowshape.turn.up.right")
+                                        }
                                         Button(role: .destructive) {
                                             store.deleteLocalMessage(peerID: peer.peerID.value, messageID: msg.id)
                                         } label: {
@@ -169,6 +191,9 @@ struct ChatView: View {
             }
 
             Divider()
+            if let reply = replyingToMessage {
+                replyPreview(reply)
+            }
             inputBar
         }
         .navigationTitle("")
@@ -242,6 +267,36 @@ struct ChatView: View {
         ) { result in
             guard case .success(let urls) = result, let url = urls.first else { return }
             store.sendFile(at: url, to: currentPeer)
+        }
+        .sheet(item: $forwardingMessage) { message in
+            NavigationStack {
+                List(forwardCandidates) { candidate in
+                    Button {
+                        forward(message: message, to: candidate)
+                    } label: {
+                        HStack(spacing: 10) {
+                            PeerAvatarView(peerID: candidate.peerID.value, size: 34, isConnected: candidate.isConnected)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(candidate.nickname)
+                                    .foregroundStyle(.primary)
+                                Text(candidate.peerID.value)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                        }
+                    }
+                }
+                .navigationTitle("Переслать сообщение")
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Отмена") {
+                            forwardingMessage = nil
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -407,11 +462,54 @@ struct ChatView: View {
         .background(Color(.systemBackground))
     }
 
+    @ViewBuilder
+    private func replyPreview(_ message: ChatMessage) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Ответ на \(message.isMe ? "ваше сообщение" : message.senderNickname)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(excerpt(from: message.text))
+                    .font(.caption)
+                    .lineLimit(2)
+                    .foregroundStyle(.primary)
+            }
+            Spacer()
+            Button {
+                replyingToMessage = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemBackground))
+    }
+
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        store.send(text: text, to: currentPeer)
+        if let reply = replyingToMessage {
+            let sender = reply.isMe ? "Вы" : reply.senderNickname
+            let quoted = "↪ \(sender): \(excerpt(from: reply.text))\n\(text)"
+            store.send(text: quoted, to: currentPeer)
+            replyingToMessage = nil
+        } else {
+            store.send(text: text, to: currentPeer)
+        }
         inputText = ""
+    }
+
+    private func forward(message: ChatMessage, to candidate: PeerEntry) {
+        let forwardText = "↪ Переслано от \(message.senderNickname):\n\(message.text)"
+        store.send(text: forwardText, to: candidate)
+        forwardingMessage = nil
+    }
+
+    private func excerpt(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(trimmed.prefix(90))
     }
 
     private func loadOlderHistoryBatch() {
