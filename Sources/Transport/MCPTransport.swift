@@ -8,6 +8,7 @@ public enum TransportPacketKind: String, Codable, Sendable {
     case ack
     case readReceipt
     case syncDigest
+    case typing
     case relay
     case fileMeta
     case fileChunk
@@ -30,6 +31,7 @@ public struct TransportMessage: Codable, Sendable {
     public let text: String?
     public let ackForMessageID: UUID?
     public let readForMessageID: UUID?
+    public let typing: Bool?
 
     public let sessionID: String?
     public let ratchetCounter: Int?
@@ -58,6 +60,7 @@ public struct TransportMessage: Codable, Sendable {
         text: String? = nil,
         ackForMessageID: UUID? = nil,
         readForMessageID: UUID? = nil,
+        typing: Bool? = nil,
         sessionID: String? = nil,
         ratchetCounter: Int? = nil,
         nonce: Data? = nil,
@@ -83,6 +86,7 @@ public struct TransportMessage: Codable, Sendable {
         self.text = text
         self.ackForMessageID = ackForMessageID
         self.readForMessageID = readForMessageID
+        self.typing = typing
         self.sessionID = sessionID
         self.ratchetCounter = ratchetCounter
         self.nonce = nonce
@@ -306,6 +310,7 @@ public enum TransportPacketKind: String, Codable, Sendable {
     case ack
     case readReceipt
     case syncDigest
+    case typing
     case relay
     case fileMeta
     case fileChunk
@@ -327,6 +332,7 @@ public struct TransportMessage: Codable, Sendable {
     public let text: String?
     public let ackForMessageID: UUID?
     public let readForMessageID: UUID?
+    public let typing: Bool?
     public let sessionID: String?
     public let ratchetCounter: Int?
     public let nonce: Data?
@@ -353,6 +359,7 @@ public struct TransportMessage: Codable, Sendable {
         text: String? = nil,
         ackForMessageID: UUID? = nil,
         readForMessageID: UUID? = nil,
+        typing: Bool? = nil,
         sessionID: String? = nil,
         ratchetCounter: Int? = nil,
         nonce: Data? = nil,
@@ -378,6 +385,7 @@ public struct TransportMessage: Codable, Sendable {
         self.text = text
         self.ackForMessageID = ackForMessageID
         self.readForMessageID = readForMessageID
+        self.typing = typing
         self.sessionID = sessionID
         self.ratchetCounter = ratchetCounter
         self.nonce = nonce

@@ -184,6 +184,8 @@ public final class NodeStore: ObservableObject {
     @Published public var callMicrophoneMuted: Bool = false
     @Published public var callSpeakerEnabled: Bool = true
     @Published public var chatThreadSettings: [String: ChatThreadSettings] = [:]
+    @Published public var peerPresenceLastSeen: [String: Date] = [:]
+    @Published public var peerTypingUntil: [String: Date] = [:]
 
     private var transport: HybridTransport?
     private var storageEngine: StorageEngine?
@@ -202,6 +204,8 @@ public final class NodeStore: ObservableObject {
     private var incomingFileNames: [UUID: String] = [:]
     private var currentScenePhase: ScenePhase = .active
     private var lastHeartbeatAt: Date = .distantPast
+    private var typingStateSent: [String: Bool] = [:]
+    private var lastTypingSentAt: [String: Date] = [:]
     private var isStartingNode = false
     private let maxDeliveryAttempts = 8
     private let maxMessagesPerPeerInMemory = 2000
@@ -321,6 +325,9 @@ public final class NodeStore: ObservableObject {
         resetCallControls()
         incomingCall = nil
         activeCall = nil
+        peerTypingUntil.removeAll()
+        typingStateSent.removeAll()
+        lastTypingSentAt.removeAll()
         isRunning = false
         appendDebug("node", "node stopped")
     }
@@ -434,6 +441,54 @@ public final class NodeStore: ObservableObject {
             appendOrUpdateMessage(peerID: peer.peerID.value, mapFromRecord(record))
             attemptDelivery(record)
         }
+    }
+
+    public func sendTyping(isTyping: Bool, to peer: PeerEntry) {
+        guard isRunning else { return }
+        let peerID = peer.peerID.value
+        let now = Date()
+        let minInterval: TimeInterval = isTyping ? 1.0 : 0.3
+        if typingStateSent[peerID] == isTyping,
+           now.timeIntervalSince(lastTypingSentAt[peerID] ?? .distantPast) < minInterval {
+            return
+        }
+        if !isTyping, typingStateSent[peerID] != true {
+            return
+        }
+
+        let packet = TransportMessage(
+            kind: .typing,
+            senderPeerID: myPeerIDValue,
+            senderNickname: nickname,
+            receiverPeerID: peerID,
+            ttl: 8,
+            relayPath: [myPeerIDValue],
+            typing: isTyping
+        )
+        do {
+            try sendTransportMessage(packet, targetPeerID: peerID, relayExcluding: Set([myPeerIDValue]))
+            typingStateSent[peerID] = isTyping
+            lastTypingSentAt[peerID] = now
+        } catch {
+            appendDebug("net", "typing signal failed: \(error.localizedDescription)")
+        }
+    }
+
+    public func isPeerTyping(_ peerID: String, now: Date = Date()) -> Bool {
+        guard let until = peerTypingUntil[peerID] else { return false }
+        return until > now
+    }
+
+    public func peerPresenceText(_ peerID: String, now: Date = Date()) -> String {
+        if let peer = peers.first(where: { $0.peerID.value == peerID }), peer.isConnected {
+            return "онлайн"
+        }
+        guard let last = peerPresenceLastSeen[peerID] else { return "не в сети" }
+        let delta = now.timeIntervalSince(last)
+        if delta < 45 { return "онлайн недавно" }
+        if delta < 180 { return "был(а) только что" }
+        if delta < 3600 { return "был(а) \(Int(delta / 60)) мин назад" }
+        return "не в сети"
     }
 
     // MARK: - Clear chat
@@ -559,6 +614,39 @@ public final class NodeStore: ObservableObject {
                     fileTotalChunks: chunks.count,
                     fileChecksum: first.fileHash
                 )
+
+                let messageRecord = StoredMessageRecord(
+                    messageID: meta.id,
+                    peerID: peer.peerID.value,
+                    senderID: myPeerIDValue,
+                    senderNickname: nickname,
+                    textBody: "Файл: \(url.lastPathComponent)",
+                    timestamp: meta.timestamp,
+                    status: .sent,
+                    attempts: 0,
+                    nextRetryAt: nil,
+                    deliveredAt: nil,
+                    readAt: nil,
+                    lastError: nil,
+                    isOutgoing: true,
+                    isRead: false,
+                    ttl: meta.ttl,
+                    relayPath: meta.relayPath,
+                    sessionID: nil,
+                    ratchetCounter: nil,
+                    nonce: nil,
+                    ciphertext: nil,
+                    tag: nil,
+                    fileID: transferID,
+                    fileName: url.lastPathComponent,
+                    fileChunkIndex: nil,
+                    fileTotalChunks: chunks.count,
+                    fileChunkData: nil,
+                    fileChecksum: first.fileHash
+                )
+                saveMessage(messageRecord)
+                appendOrUpdateMessage(peerID: peer.peerID.value, mapFromRecord(messageRecord))
+
                 try await sendTransportMessageWithRetry(
                     meta,
                     targetPeerID: peer.peerID.value,
@@ -887,6 +975,7 @@ public final class NodeStore: ObservableObject {
 
     private func handleIncoming(packet: TransportMessage, fromPeerID: PeerID) async {
         let logicalSender = PeerID(packet.senderPeerID)
+        notePeerPresence(peerID: logicalSender.value)
 
         if packet.ttl <= 0, packet.receiverPeerID != myPeerIDValue {
             appendDebug("relay", "drop ttl=0 \(packet.id.uuidString.prefix(8))")
@@ -926,6 +1015,13 @@ public final class NodeStore: ObservableObject {
             }
         case .syncDigest:
             processDeliveryQueue()
+            return
+        case .typing:
+            if packet.receiverPeerID == myPeerIDValue {
+                handleTypingSignal(packet, fromPeerID: logicalSender)
+            } else {
+                relay(packet: packet, fromPeerID: fromPeerID)
+            }
             return
         default:
             break
@@ -987,6 +1083,37 @@ public final class NodeStore: ObservableObject {
             if let fileID = packet.fileID, let name = packet.fileName, let totalChunks = packet.fileTotalChunks {
                 let safeName = sanitizedIncomingFileName(name, fileID: fileID)
                 incomingFileNames[fileID] = safeName
+                let fileMessage = StoredMessageRecord(
+                    messageID: packet.id,
+                    peerID: logicalSender.value,
+                    senderID: logicalSender.value,
+                    senderNickname: packet.senderNickname,
+                    textBody: "Входящий файл: \(safeName)",
+                    timestamp: packet.timestamp,
+                    status: .delivered,
+                    attempts: 0,
+                    nextRetryAt: nil,
+                    deliveredAt: Date(),
+                    readAt: nil,
+                    lastError: nil,
+                    isOutgoing: false,
+                    isRead: false,
+                    ttl: packet.ttl,
+                    relayPath: packet.relayPath,
+                    sessionID: nil,
+                    ratchetCounter: nil,
+                    nonce: nil,
+                    ciphertext: nil,
+                    tag: nil,
+                    fileID: fileID,
+                    fileName: safeName,
+                    fileChunkIndex: nil,
+                    fileTotalChunks: totalChunks,
+                    fileChunkData: nil,
+                    fileChecksum: packet.fileChecksum
+                )
+                saveMessage(fileMessage)
+                appendOrUpdateMessage(peerID: logicalSender.value, mapFromRecord(fileMessage))
                 try? storageEngine?.upsertFileTransfer(
                     StoredFileTransferRecord(
                         fileID: fileID,
@@ -1006,7 +1133,7 @@ public final class NodeStore: ObservableObject {
         case .fileChunk:
             handleIncomingFileChunk(packet: packet, fromPeerID: logicalSender)
 
-        case .ack, .readReceipt, .callInvite, .callAccept, .callDecline, .callEnd:
+        case .ack, .readReceipt, .callInvite, .callAccept, .callDecline, .callEnd, .typing:
             break
         case .syncDigest:
             break
@@ -1104,6 +1231,23 @@ public final class NodeStore: ObservableObject {
         return packet.text ?? ""
     }
 
+    private func handleTypingSignal(_ packet: TransportMessage, fromPeerID: PeerID) {
+        guard packet.receiverPeerID == myPeerIDValue else { return }
+        let isTyping = packet.typing ?? false
+        if isTyping {
+            peerTypingUntil[fromPeerID.value] = Date().addingTimeInterval(4)
+        } else {
+            peerTypingUntil.removeValue(forKey: fromPeerID.value)
+        }
+    }
+
+    private func notePeerPresence(peerID: String) {
+        peerPresenceLastSeen[peerID] = Date()
+        if let idx = peers.firstIndex(where: { $0.peerID.value == peerID }) {
+            peers[idx].lastSeen = Date()
+        }
+    }
+
     private func handleAck(_ packet: TransportMessage) {
         guard let ackFor = packet.ackForMessageID else { return }
         let deliveredAt = Date()
@@ -1156,6 +1300,7 @@ public final class NodeStore: ObservableObject {
             text: packet.text,
             ackForMessageID: packet.ackForMessageID,
             readForMessageID: packet.readForMessageID,
+            typing: packet.typing,
             sessionID: packet.sessionID,
             ratchetCounter: packet.ratchetCounter,
             nonce: packet.nonce,
@@ -1335,6 +1480,7 @@ public final class NodeStore: ObservableObject {
 
     private func maybeSendHeartbeat() {
         let now = Date()
+        peerTypingUntil = peerTypingUntil.filter { $0.value > now }
         let minInterval: TimeInterval
         if activeCall != nil {
             minInterval = 8
@@ -1531,6 +1677,7 @@ public final class NodeStore: ObservableObject {
         let peerID = discovered.peerID.value
         let displayNick = discovered.displayName.components(separatedBy: "#").first ?? String(peerID.prefix(8))
         let fingerprint = makeFingerprint(signing: discovered.signingPublicKey, agreement: discovered.agreementPublicKey)
+        notePeerPresence(peerID: peerID)
 
         if let idx = peers.firstIndex(where: { $0.peerID.value == peerID }) {
             var peer = peers[idx]
@@ -1565,6 +1712,7 @@ public final class NodeStore: ObservableObject {
 
     private func handleConnectedPeer(peerID: PeerID, displayName: String) {
         let nick = displayName.components(separatedBy: "#").first ?? String(peerID.value.prefix(8))
+        notePeerPresence(peerID: peerID.value)
         if let idx = peers.firstIndex(where: { $0.peerID.value == peerID.value }) {
             peers[idx].isConnected = true
             peers[idx].lastSeen = Date()
@@ -1586,10 +1734,12 @@ public final class NodeStore: ObservableObject {
         guard let idx = peers.firstIndex(where: { $0.peerID.value == peerID.value }) else { return }
         peers[idx].isConnected = false
         peers[idx].lastSeen = Date()
+        peerTypingUntil.removeValue(forKey: peerID.value)
         savePeer(peers[idx])
     }
 
     private func upsertPeerFromMessage(senderID: PeerID, nickname: String) {
+        notePeerPresence(peerID: senderID.value)
         if let idx = peers.firstIndex(where: { $0.peerID.value == senderID.value }) {
             peers[idx].nickname = nickname
             peers[idx].lastSeen = Date()
@@ -1618,6 +1768,7 @@ public final class NodeStore: ObservableObject {
         messages.removeAll()
         chatThreadSettings.removeAll()
         knownMessageIDs.removeAll()
+        peerTypingUntil.removeAll()
 
         let storedPeers = (try? storageEngine.fetchChatPeers()) ?? []
         // Deduplicate by peerID (keep the most recently seen entry)
@@ -1638,6 +1789,7 @@ public final class NodeStore: ObservableObject {
             peer.lastSeen = row.lastSeen
             return peer
         }
+        peerPresenceLastSeen = Dictionary(uniqueKeysWithValues: peers.map { ($0.peerID.value, $0.lastSeen) })
 
         let storedThreadSettings = (try? storageEngine.fetchChatThreadSettings()) ?? []
         for row in storedThreadSettings {

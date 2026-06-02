@@ -123,7 +123,7 @@ public final class HybridTransport {
 
     private func shouldUseUDP(for kind: TransportPacketKind) -> Bool {
         switch kind {
-        case .chat, .ack, .readReceipt, .syncDigest, .relay, .callInvite, .callAccept, .callDecline, .callEnd:
+        case .chat, .ack, .readReceipt, .syncDigest, .typing, .relay, .callInvite, .callAccept, .callDecline, .callEnd:
             return true
         case .fileMeta, .fileChunk:
             // 64KB chunks are too large for UDP datagrams, keep file transport on MCP relay for now.

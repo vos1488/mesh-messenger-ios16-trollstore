@@ -31,6 +31,7 @@ struct ChatView: View {
     @State private var isLoadingOlderBatch = false
     @State private var replyingToMessage: ChatMessage?
     @State private var forwardingMessage: ChatMessage?
+    @State private var typingStopTask: Task<Void, Never>?
 
     private let pageSize = 80
 
@@ -101,6 +102,13 @@ struct ChatView: View {
             }
     }
 
+    private var headerPresenceText: String {
+        if store.isPeerTyping(peer.peerID.value) {
+            return "печатает…"
+        }
+        return store.peerPresenceText(peer.peerID.value)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if let active = store.activeCall, active.peerID == peer.peerID.value {
@@ -142,7 +150,7 @@ struct ChatView: View {
                                 }
                             }
                             ForEach(displayedMessages) { msg in
-                                MessageBubble(message: msg)
+                                MessageBubble(message: msg, fileProgress: msg.fileID.flatMap { store.fileProgress[$0] })
                                     .id(msg.id)
                                     .contextMenu {
                                         Button {
@@ -202,8 +210,13 @@ struct ChatView: View {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 8) {
                     PeerAvatarView(peerID: currentPeer.peerID.value, size: 32, isConnected: currentPeer.isConnected)
-                    Text(currentPeer.nickname)
-                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(currentPeer.nickname)
+                            .font(.headline)
+                        Text(headerPresenceText)
+                            .font(.caption2)
+                            .foregroundStyle(store.isPeerTyping(peer.peerID.value) ? .green : .secondary)
+                    }
                 }
             }
             ToolbarItem(placement: .navigationBarLeading) {
@@ -297,6 +310,14 @@ struct ChatView: View {
                     }
                 }
             }
+        }
+        .onChange(of: inputText) { text in
+            handleTypingInputChange(text)
+        }
+        .onDisappear {
+            typingStopTask?.cancel()
+            typingStopTask = nil
+            store.sendTyping(isTyping: false, to: currentPeer)
         }
     }
 
@@ -490,6 +511,9 @@ struct ChatView: View {
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        typingStopTask?.cancel()
+        typingStopTask = nil
+        store.sendTyping(isTyping: false, to: currentPeer)
         if let reply = replyingToMessage {
             let sender = reply.isMe ? "Вы" : reply.senderNickname
             let quoted = "↪ \(sender): \(excerpt(from: reply.text))\n\(text)"
@@ -510,6 +534,22 @@ struct ChatView: View {
     private func excerpt(from text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return String(trimmed.prefix(90))
+    }
+
+    private func handleTypingInputChange(_ text: String) {
+        let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        typingStopTask?.cancel()
+        typingStopTask = nil
+        if hasText {
+            store.sendTyping(isTyping: true, to: currentPeer)
+            let peer = currentPeer
+            typingStopTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                store.sendTyping(isTyping: false, to: peer)
+            }
+        } else {
+            store.sendTyping(isTyping: false, to: currentPeer)
+        }
     }
 
     private func loadOlderHistoryBatch() {
@@ -556,6 +596,7 @@ struct ChatView: View {
 
 struct MessageBubble: View {
     let message: ChatMessage
+    var fileProgress: Double? = nil
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
@@ -578,6 +619,19 @@ struct MessageBubble: View {
                     )
                     .foregroundStyle(message.isMe ? .white : .primary)
                     .textSelection(.enabled)
+                if message.fileID != nil {
+                    if let progress = fileProgress, progress < 1 {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                            .frame(maxWidth: 150)
+                            .padding(.horizontal, 4)
+                    } else {
+                        Text("Файл готов")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 4)
+                    }
+                }
 
                 Text(timeString(message.timestamp))
                     .font(.caption2)
