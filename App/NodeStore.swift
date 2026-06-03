@@ -244,6 +244,7 @@ public final class NodeStore: ObservableObject {
     private let defaultWANBootstrapEndpoint = "193.233.134.133:58901"
     private let defaultWANPeerRegistryPort: UInt16 = 18080
     private let defaultWANPeerRegistryRegisterURL = "http://193.233.134.133:18080/api/mesh/peers/register"
+    private let defaultHTTPRelayBaseURL = URL(string: "http://193.233.134.133:18080")!
 
     public static let shared = NodeStore()
     private init() {
@@ -290,7 +291,8 @@ public final class NodeStore: ObservableObject {
                 localProfile: profile,
                 signingPublicKey: identity.identity.signingPublicKey,
                 agreementPublicKey: identity.identity.agreementPublicKey,
-                wanBootstrapEndpoints: effectiveWANBootstrapEndpoints()
+                wanBootstrapEndpoints: effectiveWANBootstrapEndpoints(),
+                httpRelayBaseURL: defaultHTTPRelayBaseURL
             )
             runStartupSmokeCheck(storage: storage, transport: t)
 
@@ -1825,7 +1827,8 @@ public final class NodeStore: ObservableObject {
                 localProfile: profile,
                 signingPublicKey: identity.identity.signingPublicKey,
                 agreementPublicKey: identity.identity.agreementPublicKey,
-                wanBootstrapEndpoints: effectiveWANBootstrapEndpoints()
+                wanBootstrapEndpoints: effectiveWANBootstrapEndpoints(),
+                httpRelayBaseURL: defaultHTTPRelayBaseURL
             )
             configureTransportCallbacks(t)
             transport = t

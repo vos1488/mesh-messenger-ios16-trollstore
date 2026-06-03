@@ -185,10 +185,10 @@ public final class UDPTransport {
 
     private func send(data: Data, toEndpointString endpointString: String) {
         guard let parsed = Self.parseEndpoint(endpointString) else { return }
-        // Try to send from the same local UDP listen port to keep NAT mapping stable across networks.
+        // Send once, bound to our listen port so the NAT mapping stays stable.
+        // Sending twice (with and without port binding) creates two different NAT mappings
+        // and the server registers whichever arrives last — causing asymmetric relay failures.
         sendUsingConnection(data: data, host: parsed.host, port: parsed.port, bindToListenPort: true)
-        // Fallback path in case local-port binding is unavailable on the current network stack.
-        sendUsingConnection(data: data, host: parsed.host, port: parsed.port, bindToListenPort: false)
     }
 
     private func sendUsingConnection(

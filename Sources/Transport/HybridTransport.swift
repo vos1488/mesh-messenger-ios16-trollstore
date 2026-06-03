@@ -11,22 +11,29 @@ public final class HybridTransport {
 
     private let mcpTransport: MCPTransport
     private let udpTransport: UDPTransport
+    private var httpRelay: HTTPRelayTransport?
+    private let localPeerIDValue: String
 
     public init(
         localProfile: PeerProfile,
         signingPublicKey: Data,
         agreementPublicKey: Data,
-        wanBootstrapEndpoints: [String]
+        wanBootstrapEndpoints: [String],
+        httpRelayBaseURL: URL? = nil
     ) throws {
         mcpTransport = try MCPTransport(
             localProfile: localProfile,
             signingPublicKey: signingPublicKey,
             agreementPublicKey: agreementPublicKey
         )
+        localPeerIDValue = localProfile.peerID.value
         udpTransport = UDPTransport(
             localPeerID: localProfile.peerID.value,
             bootstrapEndpoints: wanBootstrapEndpoints
         )
+        if let url = httpRelayBaseURL {
+            httpRelay = HTTPRelayTransport(localPeerID: localProfile.peerID.value, baseURL: url)
+        }
         wireCallbacks()
     }
 
@@ -34,14 +41,30 @@ public final class HybridTransport {
         udpTransport.updateBootstrapEndpoints(endpoints)
     }
 
+    public func updateHTTPRelayBaseURL(_ url: URL?) {
+        httpRelay?.stop()
+        guard let url else {
+            httpRelay = nil
+            return
+        }
+        let relay = HTTPRelayTransport(localPeerID: localPeerIDValue, baseURL: url)
+        relay.onMessageReceived = { [weak self] message, peerID in
+            self?.onMessageReceived?(message, peerID)
+        }
+        relay.start()
+        httpRelay = relay
+    }
+
     public func start() {
         mcpTransport.start()
         try? udpTransport.start()
+        httpRelay?.start()
     }
 
     public func stop() {
         mcpTransport.stop()
         udpTransport.stop()
+        httpRelay?.stop()
     }
 
     public func send(message: TransportMessage, to peerID: PeerID) throws {
@@ -52,7 +75,18 @@ public final class HybridTransport {
         guard shouldUseUDP(for: message.kind) else {
             throw TransportError.peerNotConnected
         }
-        try udpTransport.send(message: message, to: peerID)
+        // Try UDP relay first; fall back to HTTP relay which works on all NAT types.
+        var udpError: Error?
+        do {
+            try udpTransport.send(message: message, to: peerID)
+        } catch {
+            udpError = error
+        }
+        if let relay = httpRelay {
+            try relay.send(message: message, to: peerID)
+            return
+        }
+        if let err = udpError { throw err }
     }
 
     public func sendToConnectedPeers(message: TransportMessage, excludingPeerIDs: Set<String>) throws {
@@ -117,6 +151,10 @@ public final class HybridTransport {
             self?.onPeerDisconnected?(peerID)
         }
         udpTransport.onMessageReceived = { [weak self] message, peerID in
+            self?.onMessageReceived?(message, peerID)
+        }
+
+        httpRelay?.onMessageReceived = { [weak self] message, peerID in
             self?.onMessageReceived?(message, peerID)
         }
     }

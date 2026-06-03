@@ -87,6 +87,7 @@ func (h *sessionHub) cleanup(ttl time.Duration) {
 type server struct {
 	hub          *sessionHub
 	peerRegistry *meshPeerRegistry
+	relay        *relayServer
 	upgrader     websocket.Upgrader
 }
 
@@ -94,6 +95,7 @@ func newServer() *server {
 	return &server{
 		hub:          newSessionHub(),
 		peerRegistry: newMeshPeerRegistry(),
+		relay:        &relayServer{queue: newHTTPRelayQueue()},
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -105,6 +107,8 @@ func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/session", s.handleCreateSession)
 	mux.HandleFunc("/api/mesh/peers", s.handleMeshPeers)
 	mux.HandleFunc("/api/mesh/peers/register", s.handleMeshPeerRegister)
+	mux.HandleFunc("/api/mesh/relay/send", s.relay.handleRelaySend)
+	mux.HandleFunc("/api/mesh/relay/inbox", s.relay.handleRelayInbox)
 	mux.HandleFunc("/ws/web/", s.handleWebSocketWeb)
 	mux.HandleFunc("/ws/mobile/", s.handleWebSocketMobile)
 }
