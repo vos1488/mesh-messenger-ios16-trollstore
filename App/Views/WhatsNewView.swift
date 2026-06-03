@@ -6,6 +6,7 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("list.bullet.rectangle.portrait", .green, "Лог событий Web Bridge", "Web-страница теперь показывает поток событий с временем (status/authorized/heartbeat и другие сообщения), чтобы сессия не выглядела \"зависшей\"."),
         ("desktopcomputer", .blue, "PC Peer Service (Go)", "Добавлен desktop peer service с режимом системного сервиса (install/start/stop/uninstall) для Windows/macOS/Linux."),
         ("network", .orange, "Сетевой cross-check геопозиции", "Добавлена сверка GPS-точки с сетевым регионом (Wi-Fi/сотовая сеть через IP), чтобы лучше отлавливать спуфинг."),
         ("hand.draw.fill", .indigo, "Свободное управление картой", "Отключена принудительная автоцентровка: карту можно свободно двигать и отдалять как в обычных map-приложениях."),
@@ -124,5 +125,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.4.9")
+    WhatsNewView(version: "1.4.10")
 }

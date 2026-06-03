@@ -252,6 +252,13 @@ func (s *server) handleWebSocketMobile(w http.ResponseWriter, r *http.Request) {
 				"status":     "mobile_logged_out",
 				"authorized": false,
 			})
+		default:
+			s.writeToWeb(sess, map[string]any{
+				"type":         "mobile_message",
+				"session_id":   sess.ID,
+				"message_type": msgType,
+				"payload":      message,
+			})
 		}
 	}
 
@@ -351,6 +358,10 @@ const indexHTML = `<!doctype html>
     .bad { color: #f87171; }
     button { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 10px 14px; cursor: pointer; }
     code { font-size: 12px; word-break: break-all; color: #cbd5e1; display: block; margin-top: 8px; }
+    .events { margin-top: 14px; background: #11141b; border: 1px solid #252936; border-radius: 8px; max-height: 220px; overflow: auto; padding: 8px; }
+    .event { font-size: 12px; line-height: 1.35; color: #cbd5e1; padding: 4px 0; border-bottom: 1px solid #1f2330; }
+    .event:last-child { border-bottom: none; }
+    .event-time { color: #7f8aa3; margin-right: 6px; }
   </style>
 </head>
 <body>
@@ -362,6 +373,7 @@ const indexHTML = `<!doctype html>
     <div id="meta" class="muted"></div>
     <button id="newSessionBtn" type="button">Новая сессия</button>
     <code id="pairPayload"></code>
+    <div id="events" class="events"></div>
   </div>
   <script>
     const statusEl = document.getElementById('status');
@@ -369,7 +381,9 @@ const indexHTML = `<!doctype html>
     const metaEl = document.getElementById('meta');
     const payloadEl = document.getElementById('pairPayload');
     const newSessionBtn = document.getElementById('newSessionBtn');
+    const eventsEl = document.getElementById('events');
     let ws = null;
+    let lastStatus = '';
 
     function setStatus(text, cls) {
       statusEl.textContent = text;
@@ -381,11 +395,24 @@ const indexHTML = `<!doctype html>
       return proto + '//' + location.host + path;
     }
 
+    function appendEvent(label, payload) {
+      const row = document.createElement('div');
+      row.className = 'event';
+      const ts = new Date().toLocaleTimeString();
+      row.innerHTML = '<span class="event-time">[' + ts + ']</span>' + label + (payload ? ': ' + JSON.stringify(payload) : '');
+      eventsEl.prepend(row);
+      while (eventsEl.childElementCount > 120) {
+        eventsEl.removeChild(eventsEl.lastChild);
+      }
+    }
+
     async function createSession() {
       if (ws) {
         ws.close();
         ws = null;
       }
+      eventsEl.innerHTML = '';
+      lastStatus = '';
       setStatus('Создание сессии…', 'warn');
       const resp = await fetch('/api/session', { method: 'POST' });
       if (!resp.ok) throw new Error('session create failed');
@@ -393,20 +420,35 @@ const indexHTML = `<!doctype html>
       qrEl.src = data.qr_data_url;
       payloadEl.textContent = data.pair_payload;
       metaEl.textContent = 'Session: ' + data.session_id;
+      appendEvent('session_created', { session_id: data.session_id });
       connectWebSocket(data.session_id);
     }
 
     function connectWebSocket(sessionID) {
       ws = new WebSocket(wsURL('/ws/web/' + encodeURIComponent(sessionID)));
-      ws.onopen = () => setStatus('Ожидание телефона…', 'warn');
-      ws.onclose = () => setStatus('Web сокет закрыт', 'bad');
-      ws.onerror = () => setStatus('Ошибка web сокета', 'bad');
+      ws.onopen = () => {
+        setStatus('Ожидание телефона…', 'warn');
+        appendEvent('ws_open');
+      };
+      ws.onclose = () => {
+        setStatus('Web сокет закрыт', 'bad');
+        appendEvent('ws_close');
+      };
+      ws.onerror = () => {
+        setStatus('Ошибка web сокета', 'bad');
+        appendEvent('ws_error');
+      };
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          appendEvent(msg.type || 'message', msg);
           if (msg.type === 'authorized') {
             setStatus('Авторизовано. peer=' + (msg.peer_id || 'unknown'), 'ok');
           } else if (msg.type === 'status') {
+            if (msg.status === lastStatus && msg.status === 'mobile_online') {
+              return;
+            }
+            lastStatus = msg.status || '';
             if (msg.status === 'mobile_connected') {
               setStatus('Телефон подключён, ждём auth…', 'warn');
             } else if (msg.status === 'mobile_online') {
