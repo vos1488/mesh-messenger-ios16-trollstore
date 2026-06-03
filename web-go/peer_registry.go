@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,9 +155,13 @@ func publicUDPBootstrapEndpoint(r *http.Request) string {
 		}
 	}
 
-	// Use explicitly configured public address if available.
-	if publicServerAddr != "" {
-		host := publicServerAddr
+	// Use explicitly configured public address — check global then env var at request time.
+	configured := publicServerAddr
+	if configured == "" {
+		configured = strings.TrimSpace(os.Getenv("MESH_PUBLIC_ADDR"))
+	}
+	if configured != "" {
+		host := configured
 		if h, _, err2 := net.SplitHostPort(host); err2 == nil {
 			host = h
 		}
