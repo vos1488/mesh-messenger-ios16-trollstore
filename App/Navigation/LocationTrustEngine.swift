@@ -51,6 +51,7 @@ public final class LocationTrustEngine: NSObject {
     private let motionActivityManager = CMMotionActivityManager()
     private var authorization: LocationAuthorizationState = .notDetermined
     private var lastLocation: CLLocation?
+    private var lastReliableLocation: CLLocation?
     private var lastSnapshot: TrustedLocationSnapshot = .unavailable
     private var lastMotionStationary: Bool?
     private var isRunning = false
@@ -140,13 +141,21 @@ public final class LocationTrustEngine: NSObject {
     }
 
     private func evaluate(location: CLLocation) {
+        guard location.horizontalAccuracy >= 0 else { return }
+        if location.horizontalAccuracy > 1_500 {
+            publish(
+                reason: "Данные GPS слишком шумные (точность > 1500м)",
+                trustScore: 10,
+                suspectedSpoofing: false
+            )
+            return
+        }
+
         var score = 100
         var spoofSignals: [String] = []
+        var effectiveLocation = location
 
-        if location.horizontalAccuracy <= 0 {
-            score -= 40
-            spoofSignals.append("невалидная точность")
-        } else if location.horizontalAccuracy > 300 {
+        if location.horizontalAccuracy > 300 {
             score -= 40
             spoofSignals.append("очень низкая точность")
         } else if location.horizontalAccuracy > 100 {
@@ -163,11 +172,16 @@ public final class LocationTrustEngine: NSObject {
         }
 
         if let prev = lastLocation {
+            guard location.timestamp >= prev.timestamp else { return }
             let dt = max(0.1, location.timestamp.timeIntervalSince(prev.timestamp))
             let distance = location.distance(from: prev)
             let impliedSpeed = distance / dt
-            if impliedSpeed > 120 {
-                score -= 70
+            let noiseRadius = max(25, prev.horizontalAccuracy + location.horizontalAccuracy)
+            if distance <= noiseRadius {
+                // Keep center stable under jitter.
+                effectiveLocation = stabilizedLocation(previous: prev, current: location)
+            } else if impliedSpeed > 120 {
+                score -= 60
                 spoofSignals.append("телепорт: \(Int(impliedSpeed)) м/с")
             } else if impliedSpeed > 65 {
                 score -= 25
@@ -175,12 +189,13 @@ public final class LocationTrustEngine: NSObject {
             }
         }
 
-        if location.speed > 90 {
+        let measuredSpeed = location.speed >= 0 ? location.speed : 0
+        if measuredSpeed > 90 {
             score -= 30
             spoofSignals.append("скорость датчика аномальна")
         }
 
-        if let stationary = lastMotionStationary, stationary, location.speed > 12 {
+        if let stationary = lastMotionStationary, stationary, measuredSpeed > 20 {
             score -= 25
             spoofSignals.append("motion/location конфликт")
         }
@@ -193,10 +208,22 @@ public final class LocationTrustEngine: NSObject {
         }
 
         score = min(100, max(0, score))
+
+        let publishLocation: CLLocation
+        if score < 35, let reliable = lastReliableLocation {
+            publishLocation = reliable
+            spoofSignals.append("использована последняя надежная точка")
+        } else {
+            publishLocation = effectiveLocation
+        }
+
+        if score >= 60 {
+            lastReliableLocation = publishLocation
+        }
+
         let suspectedSpoofing = spoofSignals.contains(where: {
             $0.contains("телепорт") || $0.contains("simulated") || $0.contains("конфликт")
         })
-
         let reason: String
         if spoofSignals.isEmpty {
             reason = "Позиция подтверждена по сенсорам устройства"
@@ -205,12 +232,29 @@ public final class LocationTrustEngine: NSObject {
         }
 
         publish(
-            location: location,
+            location: publishLocation,
             reason: reason,
             trustScore: score,
             suspectedSpoofing: suspectedSpoofing
         )
-        lastLocation = location
+        lastLocation = effectiveLocation
+    }
+
+    private func stabilizedLocation(previous: CLLocation, current: CLLocation) -> CLLocation {
+        let prevWeight = max(0.25, min(0.85, 1.0 - (current.horizontalAccuracy / max(25, previous.horizontalAccuracy + current.horizontalAccuracy))))
+        let curWeight = 1.0 - prevWeight
+        let lat = previous.coordinate.latitude * prevWeight + current.coordinate.latitude * curWeight
+        let lon = previous.coordinate.longitude * prevWeight + current.coordinate.longitude * curWeight
+        let coord = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        return CLLocation(
+            coordinate: coord,
+            altitude: current.altitude,
+            horizontalAccuracy: min(previous.horizontalAccuracy, current.horizontalAccuracy),
+            verticalAccuracy: current.verticalAccuracy,
+            course: current.course,
+            speed: current.speed,
+            timestamp: current.timestamp
+        )
     }
 
     private func publish(

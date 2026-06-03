@@ -4,6 +4,7 @@ import Foundation
 
 struct MapLocationView: View {
     @EnvironmentObject var store: NodeStore
+    @State private var shouldFollowLocation = true
     @State private var region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 55.751244, longitude: 37.618423),
         span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
@@ -20,42 +21,56 @@ struct MapLocationView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 12) {
-                if let pin = trustedPin {
-                    Map(coordinateRegion: $region, annotationItems: [pin]) { item in
-                        MapMarker(coordinate: item.coordinate, tint: .accentColor)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .onAppear {
-                        centerMap(to: pin.coordinate)
-                    }
-                    .onChange(of: store.trustedLocation.timestamp) { _ in
-                        centerToTrustedLocationIfAvailable()
-                    }
-                } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: "location.slash")
-                            .font(.system(size: 42))
-                            .foregroundStyle(.secondary)
-                        Text("Нет доверенной геопозиции")
-                            .font(.headline)
-                        Text("Проверьте доступ к геолокации в Настройках и включите trusted navigation.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                }
-
-                locationStatusCard
+        ZStack(alignment: .top) {
+            Map(coordinateRegion: $region, annotationItems: trustedPin.map { [$0] } ?? []) { item in
+                MapMarker(coordinate: item.coordinate, tint: .accentColor)
             }
-            .padding(12)
-            .navigationTitle("Карта и геопозиция")
+            .ignoresSafeArea(edges: .top)
+            .onAppear {
+                centerToTrustedLocationIfAvailable()
+            }
+            .onChange(of: store.trustedLocation.timestamp) { _ in
+                if shouldFollowLocation {
+                    centerToTrustedLocationIfAvailable()
+                }
+            }
+
+            VStack(spacing: 10) {
+                topBar
+                Spacer()
+                locationStatusCard
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
+            }
+            .padding(.top, 8)
         }
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "location.fill")
+                    .font(.caption)
+                    .foregroundStyle(store.trustedLocation.suspectedSpoofing ? .orange : .green)
+                Text("Геопозиция")
+                    .font(.subheadline.bold())
+            }
+            Spacer()
+            Button {
+                shouldFollowLocation = true
+                centerToTrustedLocationIfAvailable()
+            } label: {
+                Image(systemName: "location.viewfinder")
+                    .font(.headline)
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 12)
     }
 
     private var locationStatusCard: some View {
@@ -79,12 +94,17 @@ struct MapLocationView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            if let speed = store.trustedLocation.speedMetersPerSecond, speed >= 0 {
+                Text("Скорость: \(Int(speed * 3.6)) км/ч")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             Text(store.trustedLocation.reason)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
         .padding(12)
-        .background(Color(.secondarySystemBackground))
+        .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 

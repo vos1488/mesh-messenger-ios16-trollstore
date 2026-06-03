@@ -6,6 +6,8 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("scope", .blue, "Геопозиция стала стабильнее", "Улучшены эвристики anti-spoof: фильтрация GPS-шума, сглаживание jitter и fallback на последнюю надежную точку."),
+        ("map.circle.fill", .teal, "Карта как основной экран", "Вкладка карты переведена в fullscreen-режим с плавающими контролами, ближе к UX Яндекс Карт / 2GIS."),
         ("square.grid.2x2.fill", .indigo, "Вкладки интерфейса", "Чаты перенесены в отдельную вкладку для более удобной навигации."),
         ("map.fill", .teal, "Карта и геопозиция", "Добавлена вкладка карты с отображением доверенной геопозиции и статуса anti-spoof."),
         ("location.circle.fill", .blue, "Trusted Navigation (beta)", "Добавлен движок доверия геопозиции с anti-spoof эвристиками для iOS 16+ (TrollStore и dev-сертификат)."),
@@ -119,5 +121,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.4.5")
+    WhatsNewView(version: "1.4.6")
 }
