@@ -185,7 +185,24 @@ public final class UDPTransport {
 
     private func send(data: Data, toEndpointString endpointString: String) {
         guard let parsed = Self.parseEndpoint(endpointString) else { return }
-        let conn = NWConnection(host: parsed.host, port: parsed.port, using: .udp)
+        // Try to send from the same local UDP listen port to keep NAT mapping stable across networks.
+        sendUsingConnection(data: data, host: parsed.host, port: parsed.port, bindToListenPort: true)
+        // Fallback path in case local-port binding is unavailable on the current network stack.
+        sendUsingConnection(data: data, host: parsed.host, port: parsed.port, bindToListenPort: false)
+    }
+
+    private func sendUsingConnection(
+        data: Data,
+        host: NWEndpoint.Host,
+        port: NWEndpoint.Port,
+        bindToListenPort: Bool
+    ) {
+        let params = NWParameters.udp
+        params.allowLocalEndpointReuse = true
+        if bindToListenPort {
+            params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host("0.0.0.0"), port: listenPort)
+        }
+        let conn = NWConnection(host: host, port: port, using: params)
         conn.start(queue: queue)
         conn.send(content: data, completion: .contentProcessed { _ in
             conn.cancel()

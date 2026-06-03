@@ -10,6 +10,7 @@ import (
 
 var udpBootstrapEnabled = true
 var udpBootstrapAddr = ":58901"
+var udpClientDefaultPort = 58901
 
 type udpRelayMessage struct {
 	SenderPeerID   string `json:"senderPeerID"`
@@ -68,7 +69,16 @@ func startUDPBootstrapRelay(listenAddr string, shutdown <-chan struct{}) error {
 
 			mu.Lock()
 			if msg.SenderPeerID != "" {
-				peers[msg.SenderPeerID] = udpPeerEndpoint{addr: srcAddrRaw, lastSeen: now}
+				targetPort := srcAddrRaw.Port
+				if targetPort <= 0 || targetPort != udpClientDefaultPort {
+					targetPort = udpClientDefaultPort
+				}
+				normalizedAddr := &net.UDPAddr{
+					IP:   append([]byte(nil), srcAddrRaw.IP...),
+					Port: targetPort,
+					Zone: srcAddrRaw.Zone,
+				}
+				peers[msg.SenderPeerID] = udpPeerEndpoint{addr: normalizedAddr, lastSeen: now}
 			}
 			for peerID, endpoint := range peers {
 				if now.Sub(endpoint.lastSeen) > 4*time.Minute {
