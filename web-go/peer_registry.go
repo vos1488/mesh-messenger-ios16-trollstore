@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// publicServerAddr can be set via --public-addr flag to explicitly advertise
+// the server's public IP in peer registry responses instead of inferring from r.Host.
+var publicServerAddr string
+
 type meshPeerRecord struct {
 	PeerID       string    `json:"peer_id"`
 	Nickname     string    `json:"nickname"`
@@ -148,6 +152,15 @@ func publicUDPBootstrapEndpoint(r *http.Request) string {
 		if relayHost != "" && relayHost != "0.0.0.0" && relayHost != "::" {
 			return relayHost + ":" + relayPort
 		}
+	}
+
+	// Use explicitly configured public address if available.
+	if publicServerAddr != "" {
+		host := publicServerAddr
+		if h, _, err2 := net.SplitHostPort(host); err2 == nil {
+			host = h
+		}
+		return net.JoinHostPort(host, relayPort)
 	}
 
 	host := strings.TrimSpace(r.Host)

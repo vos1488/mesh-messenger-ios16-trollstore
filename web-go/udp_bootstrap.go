@@ -10,7 +10,6 @@ import (
 
 var udpBootstrapEnabled = true
 var udpBootstrapAddr = ":58901"
-var udpClientDefaultPort = 58901
 
 type udpRelayMessage struct {
 	SenderPeerID   string `json:"senderPeerID"`
@@ -69,16 +68,15 @@ func startUDPBootstrapRelay(listenAddr string, shutdown <-chan struct{}) error {
 
 			mu.Lock()
 			if msg.SenderPeerID != "" {
-				targetPort := srcAddrRaw.Port
-				if targetPort <= 0 || targetPort != udpClientDefaultPort {
-					targetPort = udpClientDefaultPort
-				}
-				normalizedAddr := &net.UDPAddr{
+				// Store the real NAT-mapped source address without port normalization.
+				// The OS/NAT may assign any external port; normalizing to 58901 would
+				// cause forwarded packets to miss the peer on most carrier NATs.
+				storedAddr := &net.UDPAddr{
 					IP:   append([]byte(nil), srcAddrRaw.IP...),
-					Port: targetPort,
+					Port: srcAddrRaw.Port,
 					Zone: srcAddrRaw.Zone,
 				}
-				peers[msg.SenderPeerID] = udpPeerEndpoint{addr: normalizedAddr, lastSeen: now}
+				peers[msg.SenderPeerID] = udpPeerEndpoint{addr: storedAddr, lastSeen: now}
 			}
 			for peerID, endpoint := range peers {
 				if now.Sub(endpoint.lastSeen) > 4*time.Minute {

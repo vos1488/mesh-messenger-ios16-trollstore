@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -48,6 +49,7 @@ func main() {
 	addr := flag.String("addr", defaultListenAddress(), "listen address for peer service")
 	udpRelayAddr := flag.String("udp-relay-addr", ":58901", "udp bootstrap relay listen address")
 	udpRelayEnabled := flag.Bool("udp-relay", true, "enable embedded udp bootstrap relay")
+	publicAddr := flag.String("public-addr", "", "public IP or host to advertise in registry responses (e.g. 193.233.134.133)")
 	serviceAction := flag.String("service", "", "service action: install|uninstall|start|stop|restart")
 	serviceName := flag.String("service-name", "meshwave-peer-service", "system service name")
 	displayName := flag.String("service-display-name", "MeshWave Peer Service", "service display name")
@@ -55,13 +57,18 @@ func main() {
 	flag.Parse()
 	udpBootstrapEnabled = *udpRelayEnabled
 	udpBootstrapAddr = *udpRelayAddr
+	if *publicAddr != "" {
+		publicServerAddr = *publicAddr
+	} else if fromEnv := strings.TrimSpace(os.Getenv("MESH_PUBLIC_ADDR")); fromEnv != "" {
+		publicServerAddr = fromEnv
+	}
 
 	program := &peerServiceProgram{addr: *addr}
 	config := &service.Config{
 		Name:        *serviceName,
 		DisplayName: *displayName,
 		Description: *serviceDescription,
-		Arguments:   []string{"--addr", *addr, "--udp-relay", strconv.FormatBool(*udpRelayEnabled), "--udp-relay-addr", *udpRelayAddr},
+		Arguments:   []string{"--addr", *addr, "--udp-relay", strconv.FormatBool(*udpRelayEnabled), "--udp-relay-addr", *udpRelayAddr, "--public-addr", *publicAddr},
 	}
 	svc, err := service.New(program, config)
 	if err != nil {
