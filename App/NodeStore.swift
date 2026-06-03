@@ -230,6 +230,8 @@ public final class NodeStore: ObservableObject {
     private var typingStateSent: [String: Bool] = [:]
     private var lastTypingSentAt: [String: Date] = [:]
     private var isStartingNode = false
+    private var consecutiveTransportFailures = 0
+    private var lastTransportRecoveryAt: Date = .distantPast
     private let maxDeliveryAttempts = 8
     private let maxMessagesPerPeerInMemory = 2000
     private let maxMessagesPerPeerOnStartup = 600
@@ -281,49 +283,7 @@ public final class NodeStore: ObservableObject {
             )
             runStartupSmokeCheck(storage: storage, transport: t)
 
-            t.onPeerDiscovered = { [weak self] discovered in
-                Task { @MainActor [weak self] in
-                    self?.handleDiscoveredPeer(discovered)
-                }
-            }
-            t.onPeerConnected = { [weak self] peerID, displayName in
-                Task { @MainActor [weak self] in
-                    self?.appendDebug("net", "peer connected: \(peerID.value.prefix(8)) via \(displayName)")
-                    self?.handleConnectedPeer(peerID: peerID, displayName: displayName)
-                }
-            }
-            t.onPeerDisconnected = { [weak self] peerID in
-                Task { @MainActor [weak self] in
-                    self?.appendDebug("net", "peer disconnected: \(peerID.value.prefix(8))")
-                    self?.handleDisconnectedPeer(peerID: peerID)
-                }
-            }
-            t.onMessageReceived = { [weak self] packet, fromPeerID in
-                Task { @MainActor [weak self] in
-                    self?.appendDebug("pkt", "rx \(packet.kind.rawValue) \(packet.id.uuidString.prefix(8)) from \(fromPeerID.value.prefix(8))")
-                    await self?.handleIncoming(packet: packet, fromPeerID: fromPeerID)
-                }
-            }
-            t.onStreamReceived = { [weak self] stream, peerID, name in
-                guard name.hasPrefix("call-audio") else {
-                    stream.close()
-                    return
-                }
-                Task { @MainActor [weak self] in
-                    guard let self else {
-                        stream.close()
-                        return
-                    }
-                    guard let activeCall = self.activeCall,
-                          (activeCall.phase == .connecting || activeCall.phase == .active),
-                          activeCall.peerID == peerID.value else {
-                        self.appendDebug("call", "drop unexpected stream from \(peerID.value.prefix(8))")
-                        stream.close()
-                        return
-                    }
-                    self.callEngine.handleIncomingAudioStream(stream, from: peerID)
-                }
-            }
+            configureTransportCallbacks(t)
 
             transport = t
             callEngine.weakTransport = t.streamTransport
@@ -468,6 +428,52 @@ public final class NodeStore: ObservableObject {
         }
         locationTrustEngine?.setForegroundActive(currentScenePhase == .active)
         locationTrustEngine?.start()
+    }
+
+    private func configureTransportCallbacks(_ t: HybridTransport) {
+        t.onPeerDiscovered = { [weak self] discovered in
+            Task { @MainActor [weak self] in
+                self?.handleDiscoveredPeer(discovered)
+            }
+        }
+        t.onPeerConnected = { [weak self] peerID, displayName in
+            Task { @MainActor [weak self] in
+                self?.appendDebug("net", "peer connected: \(peerID.value.prefix(8)) via \(displayName)")
+                self?.handleConnectedPeer(peerID: peerID, displayName: displayName)
+            }
+        }
+        t.onPeerDisconnected = { [weak self] peerID in
+            Task { @MainActor [weak self] in
+                self?.appendDebug("net", "peer disconnected: \(peerID.value.prefix(8))")
+                self?.handleDisconnectedPeer(peerID: peerID)
+            }
+        }
+        t.onMessageReceived = { [weak self] packet, fromPeerID in
+            Task { @MainActor [weak self] in
+                self?.appendDebug("pkt", "rx \(packet.kind.rawValue) \(packet.id.uuidString.prefix(8)) from \(fromPeerID.value.prefix(8))")
+                await self?.handleIncoming(packet: packet, fromPeerID: fromPeerID)
+            }
+        }
+        t.onStreamReceived = { [weak self] stream, peerID, name in
+            guard name.hasPrefix("call-audio") else {
+                stream.close()
+                return
+            }
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    stream.close()
+                    return
+                }
+                guard let activeCall = self.activeCall,
+                      (activeCall.phase == .connecting || activeCall.phase == .active),
+                      activeCall.peerID == peerID.value else {
+                    self.appendDebug("call", "drop unexpected stream from \(peerID.value.prefix(8))")
+                    stream.close()
+                    return
+                }
+                self.callEngine.handleIncomingAudioStream(stream, from: peerID)
+            }
+        }
     }
 
     // MARK: - Messaging
@@ -1686,6 +1692,7 @@ public final class NodeStore: ObservableObject {
                 nextRetryAt: nextRetry,
                 error: nil
             )
+            consecutiveTransportFailures = 0
             appendDebug("delivery", "sent \(record.messageID.uuidString.prefix(8)) #\(attempts)")
         } catch {
             let attempts = record.attempts + 1
@@ -1711,6 +1718,7 @@ public final class NodeStore: ObservableObject {
                 error: error,
                 surfaceToUser: false
             )
+            maybeRecoverTransportAfterFailure(error)
             appendDebug("delivery", "\(poisoned ? "poisoned" : "retry") \(record.messageID.uuidString.prefix(8)) #\(attempts)")
         }
     }
@@ -1762,6 +1770,54 @@ public final class NodeStore: ObservableObject {
         case .edgeAlwaysOn:
             return currentScenePhase == .background ? 7.0 : 4.0
         }
+    }
+
+    private func maybeRecoverTransportAfterFailure(_ error: Error) {
+        guard isPeerUnavailableError(error) else {
+            consecutiveTransportFailures = 0
+            return
+        }
+        consecutiveTransportFailures += 1
+        guard consecutiveTransportFailures >= 3 else { return }
+        guard Date().timeIntervalSince(lastTransportRecoveryAt) > 20 else { return }
+        guard let identity = identityEngine else { return }
+
+        consecutiveTransportFailures = 0
+        lastTransportRecoveryAt = Date()
+
+        appendDebug("net", "transport self-recovery started")
+        transport?.stop()
+        for i in peers.indices {
+            peers[i].isConnected = false
+        }
+
+        do {
+            let profile = identity.identity.profile
+            let t = try HybridTransport(
+                localProfile: profile,
+                signingPublicKey: identity.identity.signingPublicKey,
+                agreementPublicKey: identity.identity.agreementPublicKey,
+                wanBootstrapEndpoints: parseWANEndpoints(from: wanBootstrapRaw)
+            )
+            configureTransportCallbacks(t)
+            transport = t
+            callEngine.weakTransport = t.streamTransport
+            t.start()
+            appendDebug("net", "transport self-recovery completed")
+        } catch {
+            reportError(domain: "network", userPrefix: "Перезапуск транспорта не удался", error: error, surfaceToUser: false)
+        }
+    }
+
+    private func isPeerUnavailableError(_ error: Error) -> Bool {
+        if let transportError = error as? TransportError {
+            switch transportError {
+            case .peerNotConnected:
+                return true
+            }
+        }
+        let text = error.localizedDescription.lowercased()
+        return text.contains("peernotconnected") || text.contains("transporterror")
     }
 
     // MARK: - Call reliability
@@ -1881,6 +1937,7 @@ public final class NodeStore: ObservableObject {
     }
 
     private func handleConnectedPeer(peerID: PeerID, displayName: String) {
+        consecutiveTransportFailures = 0
         let nick = displayName.components(separatedBy: "#").first ?? String(peerID.value.prefix(8))
         notePeerPresence(peerID: peerID.value)
         if let idx = peers.firstIndex(where: { $0.peerID.value == peerID.value }) {

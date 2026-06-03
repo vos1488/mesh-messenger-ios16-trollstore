@@ -10,6 +10,7 @@
 - E2EE: Double Ratchet + Ed25519 + X25519 + AES-256-GCM
 - Always-on peer runtime profiles: Balanced / Low Power / 2G-EDGE
 - Liquid Glass UI: iOS + Web companion
+- Self-healing transport recovery on repeated peer-not-connected failures
 - Store-and-forward (очередь и повторная доставка)
 - Mesh relay / базовая маршрутизация
 - Голосовые звонки (WebRTC/MC stream pipeline)

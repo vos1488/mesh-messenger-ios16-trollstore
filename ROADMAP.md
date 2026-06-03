@@ -150,6 +150,7 @@
 - [x] Показ fingerprint и peer identity в web-клиенте
 - [x] PC peer service как системный сервис (Windows/macOS/Linux)
 - [x] Always-on peer runtime profiles (Balanced / Low Power / 2G-EDGE)
+- [x] Self-healing transport recovery при повторных peerNotConnected ошибках
 - [ ] Полноценный web-chat (send/read sync c iOS диалогами)
 - [ ] Multi-device identity vault и синхронизация ключей между доверенными устройствами
 - [ ] Mesh consensus для маршрутов/геопозиции от нескольких узлов

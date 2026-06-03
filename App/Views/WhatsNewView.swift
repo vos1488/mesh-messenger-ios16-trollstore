@@ -6,6 +6,7 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("waveform.path.ecg.rectangle.fill", .green, "Self-healing transport", "Добавлено авто-восстановление транспортного стека после серии ошибок peerNotConnected, чтобы сообщения не зависали при сбое discovery-сессии."),
         ("drop.fill", .cyan, "Liquid Glass UI в iOS", "Основные iOS-экраны (чаты, список узлов, настройки, баннеры) переведены на стеклянный стиль с material-слоями и мягкими контурами."),
         ("bolt.horizontal.circle.fill", .green, "Always-on peer + 2G/EDGE профиль", "Добавлены runtime-профили сети: Balanced, Always-on Low Power и Always-on 2G/EDGE с адаптивными heartbeat/retry для минимального расхода батареи."),
         ("sparkles.rectangle.stack.fill", .cyan, "Liquid Glass Web UX", "Web companion переработан под desktop messenger layout: сайдбар, secure stream, event timeline и glass-эффект."),
@@ -131,5 +132,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.5.2")
+    WhatsNewView(version: "1.5.3")
 }
