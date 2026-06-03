@@ -15,6 +15,12 @@ struct MeshMessengerApp: App {
 struct RootView: View {
     @EnvironmentObject var store: NodeStore
     @Environment(\.scenePhase) private var scenePhase
+    @State private var selectedTab: AppTab = .chats
+
+    private enum AppTab: Hashable {
+        case chats
+        case map
+    }
 
     private var showCallScreen: Bool {
         if let call = store.activeCall {
@@ -27,7 +33,20 @@ struct RootView: View {
         ZStack(alignment: .top) {
             Group {
                 if store.isRunning {
-                    PeerListView()
+                    TabView(selection: $selectedTab) {
+                        PeerListView()
+                            .tag(AppTab.chats)
+                            .tabItem {
+                                Label("Чаты", systemImage: "bubble.left.and.bubble.right.fill")
+                            }
+
+                        MapLocationView()
+                            .environmentObject(store)
+                            .tag(AppTab.map)
+                            .tabItem {
+                                Label("Карта", systemImage: "map.fill")
+                            }
+                    }
                 } else {
                     LaunchView()
                 }

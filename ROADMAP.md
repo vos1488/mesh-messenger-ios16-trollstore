@@ -31,6 +31,8 @@
 - [x] Добавить индикатор прогресса отправки файлов в bubble
 - [x] Внедрить единый UI статусов доставки: queued/sent/delivered/read/failed
 - [x] Добавить «jump to first unread» в длинных диалогах
+- [x] Перенести чаты в tab-navigation (основная вкладка)
+- [x] Добавить вкладку карты с trusted геопозицией
 - [ ] Добавить управление автоудалением истории (retention policy)
 
 ## Stage 3 — Groups and secure multiparty chat (v1.5)

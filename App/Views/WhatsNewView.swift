@@ -6,6 +6,8 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("square.grid.2x2.fill", .indigo, "Вкладки интерфейса", "Чаты перенесены в отдельную вкладку для более удобной навигации."),
+        ("map.fill", .teal, "Карта и геопозиция", "Добавлена вкладка карты с отображением доверенной геопозиции и статуса anti-spoof."),
         ("location.circle.fill", .blue, "Trusted Navigation (beta)", "Добавлен движок доверия геопозиции с anti-spoof эвристиками для iOS 16+ (TrollStore и dev-сертификат)."),
         ("ellipsis.bubble.fill", .green, "Typing + presence", "В чате добавлены индикаторы «печатает…» и актуальный онлайн-статус собеседника по heartbeat."),
         ("paperclip.circle.fill", .orange, "Прогресс отправки файлов", "Файлы показываются в ленте как bubble с индикатором прогресса передачи."),
@@ -117,5 +119,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.4.4")
+    WhatsNewView(version: "1.4.5")
 }
