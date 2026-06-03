@@ -83,6 +83,34 @@ go run . --service stop
 go run . --service uninstall
 ```
 
+### WAN bootstrap node (different networks)
+
+`web-go` теперь поднимает:
+1. встроенный UDP bootstrap relay (порт `58901`) для форварда mesh-пакетов между разными сетями;
+2. HTTP peer-exchange registry (порт `18080`) для регистрации пиров и выдачи списка известных узлов.
+
+Пример запуска узла:
+
+```bash
+cd web-go
+go run . --addr :18080 --udp-relay true --udp-relay-addr :58901
+```
+
+REST API peer-exchange:
+
+- `POST /api/mesh/peers/register` — регистрация/heartbeat пира и получение `known_peers`
+- `GET /api/mesh/peers?exclude_peer_id=<peerID>` — получить текущий список пиров
+
+iOS-узел автоматически отправляет heartbeat в registry и подтягивает known peers через этот API.
+
+По умолчанию iOS использует registry первого узла:
+
+`http://193.233.134.133:18080/api/mesh/peers/register`
+
+Для iOS клиента при пустом поле WAN bootstrap автоматически используется дефолтный bootstrap endpoint:
+
+`193.233.134.133:58901`
+
 ## Roadmap
 
 См. [ROADMAP.md](ROADMAP.md).

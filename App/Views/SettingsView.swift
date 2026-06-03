@@ -10,6 +10,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) var dismiss
     @State private var editedNickname = ""
     @State private var wanBootstrap = ""
+    @State private var wanRegistryURL = ""
     @State private var showQRScanner = false
     @State private var showClearAllChatsConfirm = false
 
@@ -75,9 +76,21 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .font(.system(.caption, design: .monospaced))
-                    Text("Для связи между разными Wi‑Fi/4G укажите bootstrap relay узлы.")
+                    TextField("http://host:port/api/mesh/peers/register", text: $wanRegistryURL, axis: .vertical)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.system(.caption, design: .monospaced))
+                    Text("Для связи между разными сетями (включая мобильные) используется WAN bootstrap relay.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    Text("Активные bootstrap: \(store.effectiveWANBootstrapEndpoints().joined(separator: ", "))")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Text("Peer-exchange registry: \(store.effectiveWANPeerRegistryRegisterURLString())")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
 
                 Section("Always-on peer режим") {
@@ -198,6 +211,7 @@ struct SettingsView: View {
                             store.saveNickname(editedNickname.trimmingCharacters(in: .whitespaces))
                         }
                         store.saveWANBootstrapEndpoints(wanBootstrap)
+                        store.saveWANPeerRegistryRegisterURL(wanRegistryURL)
                         dismiss()
                     }
                 }
@@ -205,6 +219,7 @@ struct SettingsView: View {
             .onAppear {
                 editedNickname = store.nickname
                 wanBootstrap = store.wanBootstrapRaw
+                wanRegistryURL = store.wanRegistryURLRaw
             }
             .sheet(isPresented: $showQRScanner) {
                 QRScannerSheet { value in

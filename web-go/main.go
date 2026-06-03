@@ -85,13 +85,15 @@ func (h *sessionHub) cleanup(ttl time.Duration) {
 }
 
 type server struct {
-	hub      *sessionHub
-	upgrader websocket.Upgrader
+	hub          *sessionHub
+	peerRegistry *meshPeerRegistry
+	upgrader     websocket.Upgrader
 }
 
 func newServer() *server {
 	return &server{
-		hub: newSessionHub(),
+		hub:          newSessionHub(),
+		peerRegistry: newMeshPeerRegistry(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -101,6 +103,8 @@ func newServer() *server {
 func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/session", s.handleCreateSession)
+	mux.HandleFunc("/api/mesh/peers", s.handleMeshPeers)
+	mux.HandleFunc("/api/mesh/peers/register", s.handleMeshPeerRegister)
 	mux.HandleFunc("/ws/web/", s.handleWebSocketWeb)
 	mux.HandleFunc("/ws/mobile/", s.handleWebSocketMobile)
 }
@@ -415,10 +419,17 @@ func verifyAuthProof(sessionID string, message map[string]any) (string, error) {
 }
 
 func runBridgeServer(addr string, shutdown <-chan struct{}) error {
+	if udpBootstrapEnabled {
+		if err := startUDPBootstrapRelay(udpBootstrapAddr, shutdown); err != nil {
+			return err
+		}
+	}
+
 	srv := newServer()
 	mux := http.NewServeMux()
 	srv.routes(mux)
 	go srv.hub.cleanup(2 * time.Hour)
+	go srv.peerRegistry.cleanup(6 * time.Minute)
 
 	httpServer := &http.Server{
 		Addr:    addr,

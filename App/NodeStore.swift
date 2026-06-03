@@ -196,6 +196,7 @@ public final class NodeStore: ObservableObject {
     @Published public var isRunning: Bool = false
     @Published public var errorMessage: String? = nil
     @Published public var wanBootstrapRaw: String = ""
+    @Published public var wanRegistryURLRaw: String = ""
     @Published public var debugEvents: [DebugEvent] = []
     @Published public var webSessionID: String?
     @Published public var webSessionStatusText: String = "Отключено"
@@ -232,14 +233,22 @@ public final class NodeStore: ObservableObject {
     private var isStartingNode = false
     private var consecutiveTransportFailures = 0
     private var lastTransportRecoveryAt: Date = .distantPast
+    private var lastWANPeerExchangeSyncAt: Date = .distantPast
+    private var isWANPeerExchangeInFlight = false
     private let maxDeliveryAttempts = 8
     private let maxMessagesPerPeerInMemory = 2000
     private let maxMessagesPerPeerOnStartup = 600
     private let locationTrackingUserDefaultsKey = "mesh.location.trust.enabled"
     private let runtimeProfileUserDefaultsKey = "mesh.runtime.profile"
+    private let defaultWANBootstrapEndpoint = "193.233.134.133:58901"
+    private let defaultWANPeerRegistryPort: UInt16 = 18080
+    private let defaultWANPeerRegistryRegisterURL = "http://193.233.134.133:18080/api/mesh/peers/register"
 
     public static let shared = NodeStore()
-    private init() {}
+    private init() {
+        wanBootstrapRaw = UserDefaults.standard.string(forKey: "mesh_wan_bootstrap") ?? ""
+        wanRegistryURLRaw = UserDefaults.standard.string(forKey: "mesh_wan_registry_url") ?? ""
+    }
 
     // MARK: - Lifecycle
 
@@ -267,6 +276,7 @@ public final class NodeStore: ObservableObject {
             myPeerURI = profile.peerID.uri
             nickname = profile.nickname
             wanBootstrapRaw = UserDefaults.standard.string(forKey: "mesh_wan_bootstrap") ?? ""
+            wanRegistryURLRaw = UserDefaults.standard.string(forKey: "mesh_wan_registry_url") ?? ""
             locationTrackingEnabled = UserDefaults.standard.object(forKey: locationTrackingUserDefaultsKey) as? Bool ?? true
             if let raw = UserDefaults.standard.string(forKey: runtimeProfileUserDefaultsKey),
                let profile = MeshRuntimeProfile(rawValue: raw) {
@@ -279,7 +289,7 @@ public final class NodeStore: ObservableObject {
                 localProfile: profile,
                 signingPublicKey: identity.identity.signingPublicKey,
                 agreementPublicKey: identity.identity.agreementPublicKey,
-                wanBootstrapEndpoints: parseWANEndpoints(from: wanBootstrapRaw)
+                wanBootstrapEndpoints: effectiveWANBootstrapEndpoints()
             )
             runStartupSmokeCheck(storage: storage, transport: t)
 
@@ -977,8 +987,15 @@ public final class NodeStore: ObservableObject {
     public func saveWANBootstrapEndpoints(_ raw: String) {
         wanBootstrapRaw = raw
         UserDefaults.standard.set(raw, forKey: "mesh_wan_bootstrap")
-        transport?.updateWANBootstrapEndpoints(parseWANEndpoints(from: raw))
-        appendDebug("wan", "bootstrap updated: \(parseWANEndpoints(from: raw).joined(separator: ", "))")
+        let endpoints = effectiveWANBootstrapEndpoints()
+        transport?.updateWANBootstrapEndpoints(endpoints)
+        appendDebug("wan", "bootstrap updated: \(endpoints.joined(separator: ", "))")
+    }
+
+    public func saveWANPeerRegistryRegisterURL(_ raw: String) {
+        wanRegistryURLRaw = raw
+        UserDefaults.standard.set(raw, forKey: "mesh_wan_registry_url")
+        appendDebug("wan", "registry updated: \(effectiveWANPeerRegistryRegisterURLString())")
     }
 
     public func connectWebSession(from qrPayload: String) {
@@ -1624,6 +1641,7 @@ public final class NodeStore: ObservableObject {
         guard now.timeIntervalSince(lastHeartbeatAt) >= minInterval else { return }
         lastHeartbeatAt = now
         broadcastSyncDigest()
+        triggerWANPeerExchangeIfNeeded(now: now)
     }
 
     private func attemptDelivery(_ record: StoredMessageRecord) {
@@ -1797,7 +1815,7 @@ public final class NodeStore: ObservableObject {
                 localProfile: profile,
                 signingPublicKey: identity.identity.signingPublicKey,
                 agreementPublicKey: identity.identity.agreementPublicKey,
-                wanBootstrapEndpoints: parseWANEndpoints(from: wanBootstrapRaw)
+                wanBootstrapEndpoints: effectiveWANBootstrapEndpoints()
             )
             configureTransportCallbacks(t)
             transport = t
@@ -1980,6 +1998,28 @@ public final class NodeStore: ObservableObject {
         }
     }
 
+    private func upsertPeerFromWANRegistry(peerID: String, nickname: String) {
+        let normalizedPeerID = peerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedPeerID.isEmpty, normalizedPeerID != myPeerIDValue else { return }
+        let normalizedNickname = nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? String(normalizedPeerID.prefix(8))
+            : nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let idx = peers.firstIndex(where: { $0.peerID.value == normalizedPeerID }) {
+            if peers[idx].nickname.count <= 8 || peers[idx].nickname.hasPrefix("wan-") {
+                peers[idx].nickname = normalizedNickname
+            }
+            peers[idx].lastSeen = Date()
+            savePeer(peers[idx])
+            return
+        }
+
+        var entry = PeerEntry(peerID: PeerID(normalizedPeerID), nickname: normalizedNickname, isConnected: false)
+        entry.lastSeen = Date()
+        peers.append(entry)
+        savePeer(entry)
+    }
+
     private func makeFingerprint(signing: Data?, agreement: Data?) -> String? {
         guard let signing, let agreement else { return nil }
         let digest = SHA256.hash(data: signing + agreement)
@@ -2148,11 +2188,138 @@ public final class NodeStore: ObservableObject {
         }
     }
 
+    private func triggerWANPeerExchangeIfNeeded(now: Date) {
+        let minInterval = wanPeerExchangeIntervalSeconds()
+        guard now.timeIntervalSince(lastWANPeerExchangeSyncAt) >= minInterval else { return }
+        guard !isWANPeerExchangeInFlight else { return }
+        guard !myPeerIDValue.isEmpty else { return }
+        guard let registerURL = currentWANPeerRegistryRegisterURL() else { return }
+
+        isWANPeerExchangeInFlight = true
+        lastWANPeerExchangeSyncAt = now
+        let payload = WANPeerRegisterRequest(
+            peerID: myPeerIDValue,
+            nickname: nickname,
+            capabilities: ["chat", "relay", "files", "voice"]
+        )
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let response = try await Self.performWANPeerRegister(url: registerURL, payload: payload)
+                applyWANPeerRegistryResponse(response)
+            } catch {
+                appendDebug("wan", "peer exchange failed: \(error.localizedDescription)")
+            }
+            isWANPeerExchangeInFlight = false
+        }
+    }
+
+    private func wanPeerExchangeIntervalSeconds() -> TimeInterval {
+        switch runtimeProfile {
+        case .balanced:
+            return 18
+        case .lowPowerAlwaysOn:
+            return 45
+        case .edgeAlwaysOn:
+            return 75
+        }
+    }
+
+    private func currentWANPeerRegistryRegisterURL() -> URL? {
+        let raw = wanRegistryURLRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !raw.isEmpty, let url = URL(string: raw) {
+            return url
+        }
+
+        if let bootstrap = effectiveWANBootstrapEndpoints().first,
+           let host = hostFromEndpoint(bootstrap),
+           let url = URL(string: "http://\(host):\(defaultWANPeerRegistryPort)/api/mesh/peers/register") {
+            return url
+        }
+
+        return URL(string: defaultWANPeerRegistryRegisterURL)
+    }
+
+    private func applyWANPeerRegistryResponse(_ response: WANPeerRegisterResponse) {
+        var discovered = 0
+        for peer in response.knownPeers {
+            guard peer.peerID != myPeerIDValue else { continue }
+            upsertPeerFromWANRegistry(peerID: peer.peerID, nickname: peer.nickname)
+            discovered += 1
+        }
+
+        if let announcedBootstrap = normalizeWAEndpoint(response.bootstrapUDP) {
+            var merged = Set(effectiveWANBootstrapEndpoints())
+            if !merged.contains(announcedBootstrap) {
+                merged.insert(announcedBootstrap)
+                transport?.updateWANBootstrapEndpoints(Array(merged).sorted())
+                appendDebug("wan", "registry announced bootstrap \(announcedBootstrap)")
+            }
+        }
+
+        if discovered > 0 {
+            appendDebug("wan", "peer exchange synced: \(discovered) peer(s)")
+        }
+    }
+
+    private static func performWANPeerRegister(url: URL, payload: WANPeerRegisterRequest) async throws -> WANPeerRegisterResponse {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(payload)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(domain: "mesh.wan.registry", code: -1, userInfo: [NSLocalizedDescriptionKey: "invalid registry response"])
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw NSError(domain: "mesh.wan.registry", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "registry status \(http.statusCode)"])
+        }
+        return try JSONDecoder().decode(WANPeerRegisterResponse.self, from: data)
+    }
+
+    public func effectiveWANBootstrapEndpoints() -> [String] {
+        parseWANEndpoints(from: wanBootstrapRaw)
+    }
+
+    public func effectiveWANPeerRegistryRegisterURLString() -> String {
+        currentWANPeerRegistryRegisterURL()?.absoluteString ?? defaultWANPeerRegistryRegisterURL
+    }
+
     private func parseWANEndpoints(from raw: String) -> [String] {
-        raw
+        let parsed = raw
             .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == ";" })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+        if parsed.isEmpty {
+            return [defaultWANBootstrapEndpoint]
+        }
+        return Array(Set(parsed)).sorted()
+    }
+
+    private func normalizeWAEndpoint(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let host = hostFromEndpoint(value),
+              let port = portFromEndpoint(value) else { return nil }
+        return "\(host):\(port)"
+    }
+
+    private func hostFromEndpoint(_ endpoint: String) -> String? {
+        let value = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        let parts = value.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2, !parts[0].isEmpty else { return nil }
+        return parts[0]
+    }
+
+    private func portFromEndpoint(_ endpoint: String) -> UInt16? {
+        let value = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = value.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let port = UInt16(parts[1]) else { return nil }
+        return port
     }
 
     private func runStartupSmokeCheck(storage: StorageEngine, transport: HybridTransport) {
@@ -2364,5 +2531,37 @@ public final class NodeStore: ObservableObject {
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.2, repeats: false)
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: trigger)
         UNUserNotificationCenter.current().add(request)
+    }
+
+    private struct WANPeerRegisterRequest: Codable, Sendable {
+        let peerID: String
+        let nickname: String
+        let capabilities: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case peerID = "peer_id"
+            case nickname
+            case capabilities
+        }
+    }
+
+    private struct WANKnownPeer: Codable, Sendable {
+        let peerID: String
+        let nickname: String
+
+        enum CodingKeys: String, CodingKey {
+            case peerID = "peer_id"
+            case nickname
+        }
+    }
+
+    private struct WANPeerRegisterResponse: Codable, Sendable {
+        let knownPeers: [WANKnownPeer]
+        let bootstrapUDP: String?
+
+        enum CodingKeys: String, CodingKey {
+            case knownPeers = "known_peers"
+            case bootstrapUDP = "bootstrap_udp"
+        }
     }
 }

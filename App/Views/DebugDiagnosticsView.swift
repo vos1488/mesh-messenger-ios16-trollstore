@@ -13,14 +13,14 @@ struct DebugDiagnosticsView: View {
             }
 
             Section("WAN bootstrap") {
-                if store.wanBootstrapRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("Не задано")
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text(store.wanBootstrapRaw)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                }
+                Text(store.effectiveWANBootstrapEndpoints().joined(separator: ", "))
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            Section("WAN registry") {
+                Text(store.effectiveWANPeerRegistryRegisterURLString())
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
             }
 
             Section("События") {

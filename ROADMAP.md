@@ -151,6 +151,8 @@
 - [x] PC peer service как системный сервис (Windows/macOS/Linux)
 - [x] Always-on peer runtime profiles (Balanced / Low Power / 2G-EDGE)
 - [x] Self-healing transport recovery при повторных peerNotConnected ошибках
+- [x] Встроенный WAN bootstrap relay узел (UDP 58901) для межсетевой доставки
+- [x] Peer-exchange registry API (`/api/mesh/peers`) для межсетевого discovery
 - [ ] Полноценный web-chat (send/read sync c iOS диалогами)
 - [ ] Multi-device identity vault и синхронизация ключей между доверенными устройствами
 - [ ] Mesh consensus для маршрутов/геопозиции от нескольких узлов

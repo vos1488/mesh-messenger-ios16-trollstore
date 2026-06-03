@@ -6,6 +6,9 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("point.topleft.down.curvedto.point.bottomright.up", .blue, "Первый инфраструктурный узел по умолчанию", "Приложение теперь стартует через первый узел: дефолтные WAN bootstrap/registry направлены на 193.233.134.133, а URL registry можно менять прямо в настройках."),
+        ("point.3.connected.trianglepath.dotted", .mint, "Peer-exchange через bootstrap node", "Добавлен собственный обмен пирами: iOS-узлы регистрируются на bootstrap server и получают known peers для стабильной связи между разными сетями."),
+        ("antenna.radiowaves.left.and.right", .orange, "WAN bootstrap relay узел", "Добавлен встроенный UDP bootstrap relay service (порт 58901) и дефолтный WAN endpoint для межсетевой доставки сообщений между разными Wi-Fi/LTE сетями."),
         ("waveform.path.ecg.rectangle.fill", .green, "Self-healing transport", "Добавлено авто-восстановление транспортного стека после серии ошибок peerNotConnected, чтобы сообщения не зависали при сбое discovery-сессии."),
         ("drop.fill", .cyan, "Liquid Glass UI в iOS", "Основные iOS-экраны (чаты, список узлов, настройки, баннеры) переведены на стеклянный стиль с material-слоями и мягкими контурами."),
         ("bolt.horizontal.circle.fill", .green, "Always-on peer + 2G/EDGE профиль", "Добавлены runtime-профили сети: Balanced, Always-on Low Power и Always-on 2G/EDGE с адаптивными heartbeat/retry для минимального расхода батареи."),
@@ -132,5 +135,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.5.3")
+    WhatsNewView(version: "1.5.6")
 }

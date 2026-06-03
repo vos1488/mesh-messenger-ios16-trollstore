@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -45,18 +46,22 @@ func (p *peerServiceProgram) Stop(s service.Service) error {
 
 func main() {
 	addr := flag.String("addr", defaultListenAddress(), "listen address for peer service")
+	udpRelayAddr := flag.String("udp-relay-addr", ":58901", "udp bootstrap relay listen address")
+	udpRelayEnabled := flag.Bool("udp-relay", true, "enable embedded udp bootstrap relay")
 	serviceAction := flag.String("service", "", "service action: install|uninstall|start|stop|restart")
 	serviceName := flag.String("service-name", "meshwave-peer-service", "system service name")
 	displayName := flag.String("service-display-name", "MeshWave Peer Service", "service display name")
 	serviceDescription := flag.String("service-description", "MeshWave desktop peer bridge service", "service description")
 	flag.Parse()
+	udpBootstrapEnabled = *udpRelayEnabled
+	udpBootstrapAddr = *udpRelayAddr
 
 	program := &peerServiceProgram{addr: *addr}
 	config := &service.Config{
 		Name:        *serviceName,
 		DisplayName: *displayName,
 		Description: *serviceDescription,
-		Arguments:   []string{"--addr", *addr},
+		Arguments:   []string{"--addr", *addr, "--udp-relay", strconv.FormatBool(*udpRelayEnabled), "--udp-relay-addr", *udpRelayAddr},
 	}
 	svc, err := service.New(program, config)
 	if err != nil {
