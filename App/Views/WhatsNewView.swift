@@ -6,6 +6,7 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("dot.radiowaves.left.and.right", .green, "Корректный online-счетчик", "Статус подключения теперь учитывает не только прямые peer-сессии, но и активный WAN relay/первый узел, чтобы не показывать «0 подключено» при рабочем межсетевом канале."),
         ("point.topleft.down.curvedto.point.bottomright.up", .blue, "Первый инфраструктурный узел по умолчанию", "Приложение теперь стартует через первый узел: дефолтные WAN bootstrap/registry направлены на 193.233.134.133, а URL registry можно менять прямо в настройках."),
         ("point.3.connected.trianglepath.dotted", .mint, "Peer-exchange через bootstrap node", "Добавлен собственный обмен пирами: iOS-узлы регистрируются на bootstrap server и получают known peers для стабильной связи между разными сетями."),
         ("antenna.radiowaves.left.and.right", .orange, "WAN bootstrap relay узел", "Добавлен встроенный UDP bootstrap relay service (порт 58901) и дефолтный WAN endpoint для межсетевой доставки сообщений между разными Wi-Fi/LTE сетями."),
@@ -135,5 +136,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.5.6")
+    WhatsNewView(version: "1.5.7")
 }

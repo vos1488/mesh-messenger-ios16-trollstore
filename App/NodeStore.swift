@@ -234,6 +234,7 @@ public final class NodeStore: ObservableObject {
     private var consecutiveTransportFailures = 0
     private var lastTransportRecoveryAt: Date = .distantPast
     private var lastWANPeerExchangeSyncAt: Date = .distantPast
+    private var lastWANRelayOnlineAt: Date = .distantPast
     private var isWANPeerExchangeInFlight = false
     private let maxDeliveryAttempts = 8
     private let maxMessagesPerPeerInMemory = 2000
@@ -299,6 +300,7 @@ public final class NodeStore: ObservableObject {
             callEngine.weakTransport = t.streamTransport
             t.start()
             startDeliveryLoop()
+            triggerWANPeerExchangeIfNeeded(now: Date())
             requestNotificationPermission()
             configureLocationTrustEngineIfNeeded()
             isRunning = true
@@ -1117,7 +1119,14 @@ public final class NodeStore: ObservableObject {
     }
 
     public func connectedCount() -> Int {
-        peers.filter(\.isConnected).count
+        let directCount = peers.filter(\.isConnected).count
+        return directCount + (isWANRelayConnected() ? 1 : 0)
+    }
+
+    public func isWANRelayConnected(now: Date = Date()) -> Bool {
+        guard isRunning else { return false }
+        let ttl = max(60.0, wanPeerExchangeIntervalSeconds() * 2.5)
+        return now.timeIntervalSince(lastWANRelayOnlineAt) <= ttl
     }
 
     public func searchMessages(peerID: String?, query: String) -> [ChatMessage] {
@@ -1808,6 +1817,7 @@ public final class NodeStore: ObservableObject {
         for i in peers.indices {
             peers[i].isConnected = false
         }
+        lastWANRelayOnlineAt = .distantPast
 
         do {
             let profile = identity.identity.profile
@@ -2242,6 +2252,7 @@ public final class NodeStore: ObservableObject {
     }
 
     private func applyWANPeerRegistryResponse(_ response: WANPeerRegisterResponse) {
+        lastWANRelayOnlineAt = Date()
         var discovered = 0
         for peer in response.knownPeers {
             guard peer.peerID != myPeerIDValue else { continue }

@@ -56,9 +56,14 @@ struct SettingsView: View {
                         Text("\(store.peers.count)").foregroundStyle(.secondary)
                     }
                     HStack {
-                        Text("Подключено")
+                        Text("Подключено (direct+relay)")
                         Spacer()
                         Text("\(store.connectedCount())").foregroundStyle(.secondary)
+                    }
+                    if store.isWANRelayConnected() {
+                        Text("WAN relay: онлайн")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                     if store.isRunning {
                         Button("Остановить узел", role: .destructive) {

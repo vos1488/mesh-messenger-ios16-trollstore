@@ -9,6 +9,7 @@ struct DebugDiagnosticsView: View {
                 LabeledContent("PeerID", value: String(store.myPeerURI.dropFirst("peer://".count).prefix(12)))
                 LabeledContent("Пиров", value: "\(store.peers.count)")
                 LabeledContent("Подключено", value: "\(store.connectedCount())")
+                LabeledContent("WAN relay", value: store.isWANRelayConnected() ? "online" : "offline")
                 LabeledContent("Вызов", value: callState)
             }
 
