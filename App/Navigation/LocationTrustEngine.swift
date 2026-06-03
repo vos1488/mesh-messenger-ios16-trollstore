@@ -49,11 +49,14 @@ public final class LocationTrustEngine: NSObject {
 
     private let locationManager: CLLocationManager
     private let motionActivityManager = CMMotionActivityManager()
+    private let networkGeoVerifier = NetworkGeoVerifier()
     private var authorization: LocationAuthorizationState = .notDetermined
     private var lastLocation: CLLocation?
     private var lastReliableLocation: CLLocation?
+    private var latestNetworkEstimate: NetworkGeoEstimate?
     private var lastSnapshot: TrustedLocationSnapshot = .unavailable
     private var lastMotionStationary: Bool?
+    private var networkRefreshTask: Task<Void, Never>?
     private var isRunning = false
     private var isForeground = true
 
@@ -74,6 +77,7 @@ public final class LocationTrustEngine: NSObject {
         startMotionTrackingIfAvailable()
         requestLocationAccessIfNeeded()
         startLocationUpdatesForCurrentMode()
+        startNetworkRefreshLoop()
     }
 
     public func stop() {
@@ -82,6 +86,8 @@ public final class LocationTrustEngine: NSObject {
         locationManager.stopUpdatingLocation()
         locationManager.stopMonitoringSignificantLocationChanges()
         motionActivityManager.stopActivityUpdates()
+        networkRefreshTask?.cancel()
+        networkRefreshTask = nil
     }
 
     public func setForegroundActive(_ active: Bool) {
@@ -162,6 +168,12 @@ public final class LocationTrustEngine: NSObject {
             score -= 20
             spoofSignals.append("низкая точность")
         }
+        if #available(iOS 14.0, *) {
+            if locationManager.accuracyAuthorization == .reducedAccuracy {
+                score -= 15
+                spoofSignals.append("разрешена только примерная геопозиция")
+            }
+        }
 
         let age = abs(location.timestamp.timeIntervalSinceNow)
         if age > 20 {
@@ -207,6 +219,24 @@ public final class LocationTrustEngine: NSObject {
             }
         }
 
+        if let networkEstimate = latestNetworkEstimate {
+            let networkLocation = CLLocation(
+                latitude: networkEstimate.coordinate.latitude,
+                longitude: networkEstimate.coordinate.longitude
+            )
+            let mismatchMeters = location.distance(from: networkLocation)
+            if mismatchMeters > 450_000 {
+                score -= 55
+                spoofSignals.append("сильный конфликт с сетью (\(Int(mismatchMeters / 1000)) км)")
+            } else if mismatchMeters > 180_000 {
+                score -= 25
+                spoofSignals.append("конфликт с сетью (\(Int(mismatchMeters / 1000)) км)")
+            } else if mismatchMeters < 40_000 {
+                score += 5
+                spoofSignals.append("сеть подтверждает регион")
+            }
+        }
+
         score = min(100, max(0, score))
 
         let publishLocation: CLLocation
@@ -238,6 +268,20 @@ public final class LocationTrustEngine: NSObject {
             suspectedSpoofing: suspectedSpoofing
         )
         lastLocation = effectiveLocation
+    }
+
+    private func startNetworkRefreshLoop() {
+        networkRefreshTask?.cancel()
+        networkRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                let estimate = await self.networkGeoVerifier.refreshIfNeeded()
+                await MainActor.run {
+                    self.latestNetworkEstimate = estimate
+                }
+                try? await Task.sleep(nanoseconds: 180_000_000_000)
+            }
+        }
     }
 
     private func stabilizedLocation(previous: CLLocation, current: CLLocation) -> CLLocation {

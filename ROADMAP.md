@@ -131,7 +131,7 @@
 - [x] Внедрить runtime-совместимость iOS 16+ для TrollStore и Developer Certificate сборок
 - [x] Добавить базовый anti-spoof эвристический детект (simulated source / teleport / sensor mismatch)
 - [x] Добавить UI-статус доверия геопозиции в настройках
-- [ ] Добавить сетевые cross-check сигналы (IP region / RTT consistency) в trust-score
+- [x] Добавить сетевые cross-check сигналы (IP region / RTT consistency) в trust-score
 - [ ] Добавить mesh consensus proximity check от соседних peer-ов
 - [x] Добавить fallback на «последнюю доверенную точку» в навигационном маршруте
 - [ ] Вынести веса trust-факторов в калибруемые profile-политики
