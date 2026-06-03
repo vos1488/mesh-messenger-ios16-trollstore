@@ -1,7 +1,7 @@
 import Foundation
 import CoreLocation
 
-public struct NetworkGeoEstimate: Equatable {
+public struct NetworkGeoEstimate {
     public let coordinate: CLLocationCoordinate2D
     public let radiusMeters: CLLocationDistance
     public let source: String
