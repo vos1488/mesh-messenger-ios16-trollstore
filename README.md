@@ -54,6 +54,27 @@ xcodegen generate
 
 Сборка IPA выполняется GitHub Actions workflow (`Build IPA (TrollStore)`).
 
+### PC peer service (Go)
+
+В `web-go` добавлен desktop peer service с запуском как обычный процесс и как системный сервис.
+
+Быстрый запуск:
+
+```bash
+cd web-go
+go run . --addr :8080
+```
+
+Управление как сервисом:
+
+```bash
+cd web-go
+go run . --service install
+go run . --service start
+go run . --service stop
+go run . --service uninstall
+```
+
 ## Roadmap
 
 См. [ROADMAP.md](ROADMAP.md).

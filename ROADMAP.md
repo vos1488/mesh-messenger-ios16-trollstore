@@ -115,6 +115,7 @@
 - [ ] Полноценные видео-звонки (H264/HEVC/VP8)
 - [ ] Screen sharing для 1:1 и групповых сессий
 - [ ] Desktop companion node (macOS/Linux/Windows)
+- [x] Базовый PC peer service (Go) с режимом системного сервиса
 - [ ] Синхронизация нескольких устройств одного пользователя
 - [ ] Web companion с ограниченным read-only режимом
 - [ ] Плагинная транспортная архитектура (BLE-only/Wi-Fi-only/Hybrid)

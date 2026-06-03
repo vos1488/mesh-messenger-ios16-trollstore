@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -88,11 +89,11 @@ func newServer() *server {
 	}
 }
 
-func (s *server) routes() {
-	http.HandleFunc("/", s.handleIndex)
-	http.HandleFunc("/api/session", s.handleCreateSession)
-	http.HandleFunc("/ws/web/", s.handleWebSocketWeb)
-	http.HandleFunc("/ws/mobile/", s.handleWebSocketMobile)
+func (s *server) routes(mux *http.ServeMux) {
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/api/session", s.handleCreateSession)
+	mux.HandleFunc("/ws/web/", s.handleWebSocketWeb)
+	mux.HandleFunc("/ws/mobile/", s.handleWebSocketMobile)
 }
 
 func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -303,16 +304,33 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func main() {
+func runBridgeServer(addr string, shutdown <-chan struct{}) error {
 	srv := newServer()
-	srv.routes()
+	mux := http.NewServeMux()
+	srv.routes(mux)
 	go srv.hub.cleanup(2 * time.Hour)
 
-	addr := ":8080"
-	log.Printf("web bridge listening on %s", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		log.Fatal(err)
+	httpServer := &http.Server{
+		Addr:    addr,
+		Handler: mux,
 	}
+	go func() {
+		<-shutdown
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpServer.Shutdown(ctx)
+	}()
+	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+func defaultListenAddress() string {
+	if fromEnv := strings.TrimSpace(os.Getenv("MESH_WEB_ADDR")); fromEnv != "" {
+		return fromEnv
+	}
+	return ":8080"
 }
 
 const indexHTML = `<!doctype html>
