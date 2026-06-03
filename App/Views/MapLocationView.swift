@@ -4,7 +4,9 @@ import Foundation
 
 struct MapLocationView: View {
     @EnvironmentObject var store: NodeStore
-    @State private var shouldFollowLocation = true
+    @State private var shouldFollowLocation = false
+    @State private var hasInitialCenter = false
+    @State private var isProgrammaticRegionUpdate = false
     @State private var region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 55.751244, longitude: 37.618423),
         span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
@@ -27,12 +29,27 @@ struct MapLocationView: View {
             }
             .ignoresSafeArea(edges: .top)
             .onAppear {
-                centerToTrustedLocationIfAvailable()
+                if !hasInitialCenter {
+                    centerToTrustedLocationIfAvailable(preserveZoom: false)
+                    hasInitialCenter = true
+                }
             }
             .onChange(of: store.trustedLocation.timestamp) { _ in
                 if shouldFollowLocation {
-                    centerToTrustedLocationIfAvailable()
+                    centerToTrustedLocationIfAvailable(preserveZoom: true)
                 }
+            }
+            .onChange(of: region.center.latitude) { _ in
+                handleRegionChanged()
+            }
+            .onChange(of: region.center.longitude) { _ in
+                handleRegionChanged()
+            }
+            .onChange(of: region.span.latitudeDelta) { _ in
+                handleRegionChanged()
+            }
+            .onChange(of: region.span.longitudeDelta) { _ in
+                handleRegionChanged()
             }
 
             VStack(spacing: 10) {
@@ -57,8 +74,18 @@ struct MapLocationView: View {
             }
             Spacer()
             Button {
-                shouldFollowLocation = true
-                centerToTrustedLocationIfAvailable()
+                shouldFollowLocation.toggle()
+                if shouldFollowLocation {
+                    centerToTrustedLocationIfAvailable(preserveZoom: true)
+                }
+            } label: {
+                Image(systemName: shouldFollowLocation ? "location.fill" : "location")
+                    .font(.headline)
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            Button {
+                centerToTrustedLocationIfAvailable(preserveZoom: true)
             } label: {
                 Image(systemName: "location.viewfinder")
                     .font(.headline)
@@ -108,16 +135,28 @@ struct MapLocationView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private func centerToTrustedLocationIfAvailable() {
+    private func centerToTrustedLocationIfAvailable(preserveZoom: Bool) {
         guard let lat = store.trustedLocation.latitude, let lon = store.trustedLocation.longitude else { return }
-        centerMap(to: CLLocationCoordinate2D(latitude: lat, longitude: lon))
+        centerMap(to: CLLocationCoordinate2D(latitude: lat, longitude: lon), preserveZoom: preserveZoom)
     }
 
-    private func centerMap(to coordinate: CLLocationCoordinate2D) {
+    private func centerMap(to coordinate: CLLocationCoordinate2D, preserveZoom: Bool) {
+        isProgrammaticRegionUpdate = true
+        let span = preserveZoom
+            ? region.span
+            : MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
         region = MKCoordinateRegion(
             center: coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+            span: span
         )
+        DispatchQueue.main.async {
+            isProgrammaticRegionUpdate = false
+        }
+    }
+
+    private func handleRegionChanged() {
+        guard !isProgrammaticRegionUpdate else { return }
+        shouldFollowLocation = false
     }
 
     private func formatCoordinate(_ value: Double) -> String {

@@ -6,6 +6,7 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("hand.draw.fill", .indigo, "Свободное управление картой", "Отключена принудительная автоцентровка: карту можно свободно двигать и отдалять как в обычных map-приложениях."),
         ("scope", .blue, "Геопозиция стала стабильнее", "Улучшены эвристики anti-spoof: фильтрация GPS-шума, сглаживание jitter и fallback на последнюю надежную точку."),
         ("map.circle.fill", .teal, "Карта как основной экран", "Вкладка карты переведена в fullscreen-режим с плавающими контролами, ближе к UX Яндекс Карт / 2GIS."),
         ("square.grid.2x2.fill", .indigo, "Вкладки интерфейса", "Чаты перенесены в отдельную вкладку для более удобной навигации."),
@@ -121,5 +122,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.4.6")
+    WhatsNewView(version: "1.4.7")
 }
