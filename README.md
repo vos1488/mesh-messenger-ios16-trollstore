@@ -1,4 +1,4 @@
-# MeshMessenger (iOS 16+, TrollStore/ESign)
+# MeshWave (iOS 16+, TrollStore/ESign)
 
 Децентрализованный P2P-мессенджер без центральных серверов.  
 Каждое устройство работает как самостоятельный узел mesh-сети: находит пиров, передаёт сообщения, может быть relay-узлом и хранит данные локально.
@@ -7,7 +7,7 @@
 
 - P2P discovery (Multipeer Connectivity)
 - Личные чаты с локальным хранением (SQLite)
-- E2EE: Ed25519 + X25519 + AES-256-GCM
+- E2EE: Double Ratchet + Ed25519 + X25519 + AES-256-GCM
 - Store-and-forward (очередь и повторная доставка)
 - Mesh relay / базовая маршрутизация
 - Голосовые звонки (WebRTC/MC stream pipeline)
@@ -54,9 +54,14 @@ xcodegen generate
 
 Сборка IPA выполняется GitHub Actions workflow (`Build IPA (TrollStore)`).
 
-### PC peer service (Go)
+### Web companion + PC peer service (Go)
 
 В `web-go` добавлен desktop peer service с запуском как обычный процесс и как системный сервис.
+Новый web-клиент выполнен в стиле desktop messenger (Liquid Glass UI), показывает live-события сессии и проверяет криптографическое подтверждение узла:
+
+- `auth_challenge` + `auth_signature` (Ed25519) для handshake
+- fingerprint ключей в web UI
+- bridge работает как blind relay (без дешифрования контента)
 
 Быстрый запуск:
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-Ниже — расширенный план развития MeshMessenger.  
+Ниже — расширенный план развития MeshWave.  
 Каждый этап содержит 10–15 конкретных задач.
 
 ## Stage 1 — Core stabilization (v1.3)
@@ -33,6 +33,7 @@
 - [x] Добавить «jump to first unread» в длинных диалогах
 - [x] Перенести чаты в tab-navigation (основная вкладка)
 - [x] Добавить вкладку карты с trusted геопозицией
+- [x] Подготовить визуальный стиль Liquid Glass для ключевых экранов
 - [ ] Добавить управление автоудалением истории (retention policy)
 
 ## Stage 3 — Groups and secure multiparty chat (v1.5)
@@ -117,7 +118,7 @@
 - [ ] Desktop companion node (macOS/Linux/Windows)
 - [x] Базовый PC peer service (Go) с режимом системного сервиса
 - [ ] Синхронизация нескольких устройств одного пользователя
-- [ ] Web companion с ограниченным read-only режимом
+- [x] Web companion с ограниченным read-only режимом
 - [ ] Плагинная транспортная архитектура (BLE-only/Wi-Fi-only/Hybrid)
 - [ ] Публичный protocol spec и interoperability test suite
 - [ ] Инструменты миграции базы и профиля между версиями
@@ -138,3 +139,16 @@
 - [ ] Вынести веса trust-факторов в калибруемые profile-политики
 - [ ] Добавить экран диагностики spoof-сигналов и confidence timeline
 - [ ] Прогнать полевые тесты (город/трасса/офлайн) и откалибровать пороги
+
+## Stage 10 — MeshWave major expansion (v2.2)
+
+- [x] Ребрендинг приложения: MeshWave (название + отображение продукта)
+- [x] Liquid Glass web UX в стиле desktop messenger (Telegram-like layout)
+- [x] Live web event stream + secure diagnostics timeline
+- [x] Криптографическое подтверждение web-сессии (`auth_challenge` + Ed25519 signature)
+- [x] Показ fingerprint и peer identity в web-клиенте
+- [x] PC peer service как системный сервис (Windows/macOS/Linux)
+- [ ] Полноценный web-chat (send/read sync c iOS диалогами)
+- [ ] Multi-device identity vault и синхронизация ключей между доверенными устройствами
+- [ ] Mesh consensus для маршрутов/геопозиции от нескольких узлов
+- [ ] Анонимные relay-пути с ротацией hop-профилей

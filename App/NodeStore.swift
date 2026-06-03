@@ -158,7 +158,12 @@ public struct DebugEvent: Identifiable, Equatable {
 
 private let appStoreDir: URL = {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-    let dir = docs.appendingPathComponent("MeshMessenger", isDirectory: true)
+    let legacyDir = docs.appendingPathComponent("MeshMessenger", isDirectory: true)
+    let dir = docs.appendingPathComponent("MeshWave", isDirectory: true)
+    if !FileManager.default.fileExists(atPath: dir.path),
+       FileManager.default.fileExists(atPath: legacyDir.path) {
+        try? FileManager.default.moveItem(at: legacyDir, to: dir)
+    }
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }()
@@ -939,13 +944,42 @@ public final class NodeStore: ObservableObject {
             appendDebug("web", "node not running for web auth")
             return
         }
+        guard let identity = identityEngine else {
+            webSessionStatusText = "Крипто-движок недоступен"
+            webSessionAuthorized = false
+            appendDebug("web", "identity engine unavailable")
+            return
+        }
+
+        let issuedAt = Int(Date().timeIntervalSince1970)
+        let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let challenge = "\(payload.sessionID):\(issuedAt):\(nonce)"
+        guard let challengeData = challenge.data(using: .utf8),
+              let signatureData = try? identity.signature(for: challengeData) else {
+            webSessionStatusText = "Не удалось подписать web auth"
+            webSessionAuthorized = false
+            appendDebug("web", "failed to sign auth challenge")
+            return
+        }
+        let signingKeyB64 = identity.identity.signingPublicKey.base64EncodedString()
+        let agreementKeyB64 = identity.identity.agreementPublicKey.base64EncodedString()
+        let fingerprint = Data(SHA256.hash(data: identity.identity.signingPublicKey + identity.identity.agreementPublicKey)).hexString
 
         ensureWebBridgeClient()
         webSessionID = payload.sessionID
         webSessionStatusText = "Подключение…"
         webSessionAuthorized = false
         appendDebug("web", "connect session \(payload.sessionID.prefix(8))")
-        webBridgeClient?.connect(payload: payload, peerID: myPeerIDValue, nickname: nickname)
+        webBridgeClient?.connect(
+            payload: payload,
+            peerID: myPeerIDValue,
+            nickname: nickname,
+            signingPublicKeyB64: signingKeyB64,
+            agreementPublicKeyB64: agreementKeyB64,
+            keyFingerprint: fingerprint,
+            authChallenge: challenge,
+            authSignature: signatureData.base64EncodedString()
+        )
     }
 
     public func disconnectWebSession() {

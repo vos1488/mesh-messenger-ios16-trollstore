@@ -31,6 +31,17 @@ struct RootView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.06, green: 0.10, blue: 0.18),
+                    Color(red: 0.08, green: 0.12, blue: 0.24),
+                    Color(red: 0.05, green: 0.08, blue: 0.16)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
             Group {
                 if store.isRunning {
                     TabView(selection: $selectedTab) {
@@ -109,35 +120,48 @@ struct LaunchView: View {
     @EnvironmentObject var store: NodeStore
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            Image(systemName: "antenna.radiowaves.left.and.right.circle.fill")
-                .font(.system(size: 80))
-                .foregroundStyle(Color.accentColor)
-            Text("MeshMessenger")
-                .font(.largeTitle)
-                .bold()
-            Text("Децентрализованный P2P мессенджер")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        ZStack {
+            VStack(spacing: 20) {
+                Spacer()
+                VStack(spacing: 16) {
+                    Image(systemName: "antenna.radiowaves.left.and.right.circle.fill")
+                        .font(.system(size: 80))
+                        .foregroundStyle(Color.accentColor)
+                    Text("MeshWave")
+                        .font(.largeTitle)
+                        .bold()
+                    Text("Полноценная mesh-сеть: чат, карта, звонки, relay")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
 
-            if let error = store.errorMessage {
-                VStack(spacing: 8) {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    Button("Повторить") {
-                        Task { await store.start() }
+                    if let error = store.errorMessage {
+                        VStack(spacing: 8) {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            Button("Повторить") {
+                                Task { await store.start() }
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    } else {
+                        ProgressView("Запуск узла…")
                     }
-                    .buttonStyle(.borderedProminent)
                 }
-            } else {
-                ProgressView("Запуск узла…")
+                .padding(.horizontal, 28)
+                .padding(.vertical, 30)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+
+                Spacer()
             }
-            Spacer()
         }
+        .padding(.horizontal, 20)
     }
 }
 

@@ -6,6 +6,10 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("sparkles.rectangle.stack.fill", .cyan, "Liquid Glass Web UX", "Web companion переработан под desktop messenger layout: сайдбар, secure stream, event timeline и glass-эффект."),
+        ("lock.shield.fill", .green, "Крипто-handshake web-сессии", "Добавлена обязательная проверка auth_challenge + Ed25519 подписи, чтобы web login подтверждался ключами узла."),
+        ("person.badge.key.fill", .mint, "Identity fingerprint в web UI", "В веб-клиенте отображаются PeerID и fingerprint ключей для ручной проверки доверия."),
+        ("app.connected.to.app.below.fill", .blue, "Ребрендинг в MeshWave", "Приложение переименовано из MeshMessenger в MeshWave как полноценная mesh-платформа."),
         ("list.bullet.rectangle.portrait", .green, "Лог событий Web Bridge", "Web-страница теперь показывает поток событий с временем (status/authorized/heartbeat и другие сообщения), чтобы сессия не выглядела \"зависшей\"."),
         ("desktopcomputer", .blue, "PC Peer Service (Go)", "Добавлен desktop peer service с режимом системного сервиса (install/start/stop/uninstall) для Windows/macOS/Linux."),
         ("network", .orange, "Сетевой cross-check геопозиции", "Добавлена сверка GPS-точки с сетевым регионом (Wi-Fi/сотовая сеть через IP), чтобы лучше отлавливать спуфинг."),
@@ -125,5 +129,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.4.10")
+    WhatsNewView(version: "1.5.0")
 }

@@ -125,7 +125,7 @@ public final class UpdateChecker: ObservableObject {
         if !githubToken.isEmpty {
             request.setValue("Bearer \(githubToken)", forHTTPHeaderField: "Authorization")
         }
-        request.setValue("MeshMessenger/\(currentVersion) iOS-UpdateChecker", forHTTPHeaderField: "User-Agent")
+        request.setValue("MeshWave/\(currentVersion) iOS-UpdateChecker", forHTTPHeaderField: "User-Agent")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -266,7 +266,7 @@ public final class UpdateChecker: ObservableObject {
 
     private func downloadIPA(from sourceURL: URL) async throws -> URL {
         var request = URLRequest(url: sourceURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 180)
-        request.setValue("MeshMessenger/\(currentVersion) iOS-UpdateInstaller", forHTTPHeaderField: "User-Agent")
+        request.setValue("MeshWave/\(currentVersion) iOS-UpdateInstaller", forHTTPHeaderField: "User-Agent")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
 
         // Add auth only if a token is configured (needed for private forks only)

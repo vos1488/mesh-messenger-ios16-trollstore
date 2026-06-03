@@ -13,7 +13,7 @@ struct PeerListView: View {
                     peerList
                 }
             }
-            .navigationTitle("Mesh Peers")
+            .navigationTitle("MeshWave Nodes")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     statusBadge
@@ -40,7 +40,7 @@ struct PeerListView: View {
             Text("Ищем пиров…")
                 .font(.title2)
                 .bold()
-            Text("Убедитесь, что на другом устройстве запущен MeshMessenger и они в одной сети (Wi-Fi) или рядом (Bluetooth)")
+            Text("Убедитесь, что на другом устройстве запущен MeshWave и оно в одной сети (Wi-Fi) или рядом (Bluetooth)")
                 .multilineTextAlignment(.center)
                 .font(.callout)
                 .foregroundStyle(.secondary)

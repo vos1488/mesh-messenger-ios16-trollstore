@@ -25,15 +25,34 @@ public final class WebBridgeClient {
     private var authRetryTask: Task<Void, Never>?
     private var peerID: String = ""
     private var nickname: String = ""
+    private var signingPublicKeyB64: String = ""
+    private var agreementPublicKeyB64: String = ""
+    private var keyFingerprint: String = ""
+    private var authChallenge: String = ""
+    private var authSignature: String = ""
 
     public init() {}
 
-    public func connect(payload: WebPairingPayload, peerID: String, nickname: String) {
+    public func connect(
+        payload: WebPairingPayload,
+        peerID: String,
+        nickname: String,
+        signingPublicKeyB64: String,
+        agreementPublicKeyB64: String,
+        keyFingerprint: String,
+        authChallenge: String,
+        authSignature: String
+    ) {
         disconnect(reason: "replaced", shouldEmit: false)
         isManualDisconnect = false
         currentPayload = payload
         self.peerID = peerID
         self.nickname = nickname
+        self.signingPublicKeyB64 = signingPublicKeyB64
+        self.agreementPublicKeyB64 = agreementPublicKeyB64
+        self.keyFingerprint = keyFingerprint
+        self.authChallenge = authChallenge
+        self.authSignature = authSignature
         onEvent?(.connecting(payload.sessionID))
 
         let cfg = URLSessionConfiguration.default
@@ -80,7 +99,12 @@ public final class WebBridgeClient {
                     "session_id": self.currentPayload?.sessionID ?? "",
                     "peer_id": self.peerID,
                     "nickname": self.nickname,
-                    "platform": "ios"
+                    "platform": "ios",
+                    "signing_pub_key": self.signingPublicKeyB64,
+                    "agreement_pub_key": self.agreementPublicKeyB64,
+                    "key_fingerprint": self.keyFingerprint,
+                    "auth_challenge": self.authChallenge,
+                    "auth_signature": self.authSignature
                 ])
             }
         }

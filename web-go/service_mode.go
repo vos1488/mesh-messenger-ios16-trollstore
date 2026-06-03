@@ -46,9 +46,9 @@ func (p *peerServiceProgram) Stop(s service.Service) error {
 func main() {
 	addr := flag.String("addr", defaultListenAddress(), "listen address for peer service")
 	serviceAction := flag.String("service", "", "service action: install|uninstall|start|stop|restart")
-	serviceName := flag.String("service-name", "mesh-peer-service", "system service name")
-	displayName := flag.String("service-display-name", "MeshMessenger Peer Service", "service display name")
-	serviceDescription := flag.String("service-description", "MeshMessenger desktop peer bridge service", "service description")
+	serviceName := flag.String("service-name", "meshwave-peer-service", "system service name")
+	displayName := flag.String("service-display-name", "MeshWave Peer Service", "service display name")
+	serviceDescription := flag.String("service-description", "MeshWave desktop peer bridge service", "service description")
 	flag.Parse()
 
 	program := &peerServiceProgram{addr: *addr}

@@ -65,6 +65,8 @@ public final class IdentityEngine {
 
 final class KeyStore {
     static let shared = KeyStore()
+    private let serviceName = "MeshWave"
+    private let legacyServiceName = "MeshMessenger"
 
     private init() {}
 
@@ -72,7 +74,7 @@ final class KeyStore {
         #if canImport(Security)
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
-            kSecAttrService: "MeshMessenger",
+            kSecAttrService: serviceName,
             kSecAttrAccount: tag,
             kSecValueData: data,
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -93,17 +95,20 @@ final class KeyStore {
 
     func read(tag: String) -> Data? {
         #if canImport(Security)
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: "MeshMessenger",
-            kSecAttrAccount: tag,
-            kSecReturnData: kCFBooleanTrue as Any,
-            kSecMatchLimit: kSecMatchLimitOne
-        ]
+        let services = [serviceName, legacyServiceName]
+        for service in services {
+            let query: [CFString: Any] = [
+                kSecClass: kSecClassGenericPassword,
+                kSecAttrService: service,
+                kSecAttrAccount: tag,
+                kSecReturnData: kCFBooleanTrue as Any,
+                kSecMatchLimit: kSecMatchLimitOne
+            ]
 
-        var item: CFTypeRef?
-        if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess {
-            return item as? Data
+            var item: CFTypeRef?
+            if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess {
+                return item as? Data
+            }
         }
         return UserDefaults.standard.data(forKey: tag)
         #else

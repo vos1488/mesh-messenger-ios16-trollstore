@@ -136,9 +136,9 @@ struct SettingsView: View {
 
                 Section("О приложении") {
                     LabeledContent("Версия", value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
-                    LabeledContent("Протокол", value: "MeshMessenger P2P")
+                    LabeledContent("Протокол", value: "MeshWave Mesh Protocol")
                     LabeledContent("Транспорт", value: "Hybrid (MCP + UDP)")
-                    LabeledContent("Шифрование", value: "AES-256-GCM + Ed25519")
+                    LabeledContent("Шифрование", value: "Double Ratchet + AES-256-GCM + Ed25519")
                     LabeledContent("DHT", value: "Kademlia")
                 }
 
