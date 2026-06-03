@@ -10,7 +10,7 @@ final class BackgroundRuntimeManager {
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private(set) var keepAliveEnabled = false
 
-    func activateKeepAlive() {
+    func activateKeepAlive(lowPower: Bool = false) {
         guard !keepAliveEnabled else { return }
         keepAliveEnabled = true
         beginBackgroundTaskIfNeeded()
@@ -18,9 +18,16 @@ final class BackgroundRuntimeManager {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            if lowPower {
+                try session.setPreferredSampleRate(8_000)
+                try session.setPreferredIOBufferDuration(0.2)
+            } else {
+                try session.setPreferredSampleRate(16_000)
+                try session.setPreferredIOBufferDuration(0.08)
+            }
             try session.setActive(true)
 
-            let audio = try AVAudioPlayer(data: makeSilenceWavData())
+            let audio = try AVAudioPlayer(data: makeSilenceWavData(duration: lowPower ? 2.0 : 1.0, sampleRate: lowPower ? 4000 : 8000))
             audio.numberOfLoops = -1
             audio.volume = 0.001
             audio.play()
@@ -121,7 +128,7 @@ private extension Data {
 @MainActor
 final class BackgroundRuntimeManager {
     private(set) var keepAliveEnabled = false
-    func activateKeepAlive() { keepAliveEnabled = true }
+    func activateKeepAlive(lowPower: Bool = false) { _ = lowPower; keepAliveEnabled = true }
     func deactivateKeepAlive() { keepAliveEnabled = false }
     func activateCallAudio() {}
     func deactivateCallAudio() {}

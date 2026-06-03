@@ -80,6 +80,34 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Always-on peer режим") {
+                    Picker(
+                        "Профиль",
+                        selection: Binding(
+                            get: { store.runtimeProfile },
+                            set: { store.setRuntimeProfile($0) }
+                        )
+                    ) {
+                        ForEach(MeshRuntimeProfile.allCases, id: \.rawValue) { profile in
+                            Text(profile.title).tag(profile)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Group {
+                        switch store.runtimeProfile {
+                        case .balanced:
+                            Text("Стандартный баланс задержки и энергии. Подходит для Wi-Fi/LTE.")
+                        case .lowPowerAlwaysOn:
+                            Text("Узел держится постоянно, но реже шлет heartbeat и мягче ретраи — меньше расход батареи.")
+                        case .edgeAlwaysOn:
+                            Text("Профиль для 2G/EDGE: длинные heartbeat/ретраи, минимум фоновой нагрузки, стабильнее на слабых каналах.")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+
                 Section("Навигация и anti-spoof") {
                     Toggle(
                         "Включить доверенную геопозицию",

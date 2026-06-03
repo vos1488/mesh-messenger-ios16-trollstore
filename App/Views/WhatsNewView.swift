@@ -6,6 +6,7 @@ struct WhatsNewView: View {
     let version: String
 
     private let features: [(icon: String, color: Color, title: String, desc: String)] = [
+        ("bolt.horizontal.circle.fill", .green, "Always-on peer + 2G/EDGE профиль", "Добавлены runtime-профили сети: Balanced, Always-on Low Power и Always-on 2G/EDGE с адаптивными heartbeat/retry для минимального расхода батареи."),
         ("sparkles.rectangle.stack.fill", .cyan, "Liquid Glass Web UX", "Web companion переработан под desktop messenger layout: сайдбар, secure stream, event timeline и glass-эффект."),
         ("lock.shield.fill", .green, "Крипто-handshake web-сессии", "Добавлена обязательная проверка auth_challenge + Ed25519 подписи, чтобы web login подтверждался ключами узла."),
         ("person.badge.key.fill", .mint, "Identity fingerprint в web UI", "В веб-клиенте отображаются PeerID и fingerprint ключей для ручной проверки доверия."),
@@ -129,5 +130,5 @@ extension View {
 }
 
 #Preview {
-    WhatsNewView(version: "1.5.0")
+    WhatsNewView(version: "1.5.1")
 }

@@ -156,6 +156,20 @@ public struct DebugEvent: Identifiable, Equatable {
     public let message: String
 }
 
+public enum MeshRuntimeProfile: String, CaseIterable, Codable {
+    case balanced
+    case lowPowerAlwaysOn
+    case edgeAlwaysOn
+
+    public var title: String {
+        switch self {
+        case .balanced: return "Balanced"
+        case .lowPowerAlwaysOn: return "Always-on (Low Power)"
+        case .edgeAlwaysOn: return "Always-on (2G/EDGE)"
+        }
+    }
+}
+
 private let appStoreDir: URL = {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     let legacyDir = docs.appendingPathComponent("MeshMessenger", isDirectory: true)
@@ -193,6 +207,7 @@ public final class NodeStore: ObservableObject {
     @Published public var peerTypingUntil: [String: Date] = [:]
     @Published public var locationTrackingEnabled: Bool = true
     @Published public var trustedLocation: TrustedLocationSnapshot = .unavailable
+    @Published public var runtimeProfile: MeshRuntimeProfile = .balanced
 
     private var transport: HybridTransport?
     private var storageEngine: StorageEngine?
@@ -219,6 +234,7 @@ public final class NodeStore: ObservableObject {
     private let maxMessagesPerPeerInMemory = 2000
     private let maxMessagesPerPeerOnStartup = 600
     private let locationTrackingUserDefaultsKey = "mesh.location.trust.enabled"
+    private let runtimeProfileUserDefaultsKey = "mesh.runtime.profile"
 
     public static let shared = NodeStore()
     private init() {}
@@ -250,6 +266,10 @@ public final class NodeStore: ObservableObject {
             nickname = profile.nickname
             wanBootstrapRaw = UserDefaults.standard.string(forKey: "mesh_wan_bootstrap") ?? ""
             locationTrackingEnabled = UserDefaults.standard.object(forKey: locationTrackingUserDefaultsKey) as? Bool ?? true
+            if let raw = UserDefaults.standard.string(forKey: runtimeProfileUserDefaultsKey),
+               let profile = MeshRuntimeProfile(rawValue: raw) {
+                runtimeProfile = profile
+            }
 
             loadPersistedData()
 
@@ -375,7 +395,12 @@ public final class NodeStore: ObservableObject {
             if activeCall != nil {
                 backgroundRuntime.activateCallAudio()
             } else {
-                backgroundRuntime.activateKeepAlive()
+                switch runtimeProfile {
+                case .balanced:
+                    backgroundRuntime.activateKeepAlive()
+                case .lowPowerAlwaysOn, .edgeAlwaysOn:
+                    backgroundRuntime.activateKeepAlive(lowPower: true)
+                }
             }
             processDeliveryQueue()
         case .inactive:
@@ -393,6 +418,22 @@ public final class NodeStore: ObservableObject {
         } else {
             locationTrustEngine?.stop()
             trustedLocation = .unavailable
+        }
+    }
+
+    public func setRuntimeProfile(_ profile: MeshRuntimeProfile) {
+        runtimeProfile = profile
+        UserDefaults.standard.set(profile.rawValue, forKey: runtimeProfileUserDefaultsKey)
+        appendDebug("net", "runtime profile set: \(profile.rawValue)")
+        if currentScenePhase == .background && activeCall == nil {
+            switch profile {
+            case .balanced:
+                backgroundRuntime.activateKeepAlive()
+            case .lowPowerAlwaysOn:
+                backgroundRuntime.activateKeepAlive(lowPower: true)
+            case .edgeAlwaysOn:
+                backgroundRuntime.activateKeepAlive(lowPower: true)
+            }
         }
     }
 
@@ -504,6 +545,9 @@ public final class NodeStore: ObservableObject {
 
     public func sendTyping(isTyping: Bool, to peer: PeerEntry) {
         guard isRunning else { return }
+        if runtimeProfile == .edgeAlwaysOn && currentScenePhase == .background {
+            return
+        }
         let peerID = peer.peerID.value
         let now = Date()
         let minInterval: TimeInterval = isTyping ? 1.0 : 0.3
@@ -1551,7 +1595,8 @@ public final class NodeStore: ObservableObject {
         deliveryTask = Task(priority: .background) { [weak self] in
             while !(Task.isCancelled) {
                 await MainActor.run { self?.processDeliveryQueue() }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                let seconds = await MainActor.run { self?.deliveryLoopIntervalSeconds() ?? 2.0 }
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             }
         }
     }
@@ -1569,14 +1614,7 @@ public final class NodeStore: ObservableObject {
     private func maybeSendHeartbeat() {
         let now = Date()
         peerTypingUntil = peerTypingUntil.filter { $0.value > now }
-        let minInterval: TimeInterval
-        if activeCall != nil {
-            minInterval = 8
-        } else if currentScenePhase == .background {
-            minInterval = 28
-        } else {
-            minInterval = 12
-        }
+        let minInterval = heartbeatIntervalSeconds()
         guard now.timeIntervalSince(lastHeartbeatAt) >= minInterval else { return }
         lastHeartbeatAt = now
         broadcastSyncDigest()
@@ -1679,7 +1717,51 @@ public final class NodeStore: ObservableObject {
 
     private func backoffSeconds(forAttempt attempt: Int) -> TimeInterval {
         let raw = pow(2.0, Double(max(1, attempt)))
-        return min(120, raw)
+        let cap: TimeInterval
+        switch runtimeProfile {
+        case .balanced:
+            cap = 120
+        case .lowPowerAlwaysOn:
+            cap = 180
+        case .edgeAlwaysOn:
+            cap = 420
+        }
+        return min(cap, raw)
+    }
+
+    private func heartbeatIntervalSeconds() -> TimeInterval {
+        if activeCall != nil {
+            return 8
+        }
+        if currentScenePhase == .background {
+            switch runtimeProfile {
+            case .balanced:
+                return 28
+            case .lowPowerAlwaysOn:
+                return 42
+            case .edgeAlwaysOn:
+                return 75
+            }
+        }
+        switch runtimeProfile {
+        case .balanced:
+            return 12
+        case .lowPowerAlwaysOn:
+            return 20
+        case .edgeAlwaysOn:
+            return 32
+        }
+    }
+
+    private func deliveryLoopIntervalSeconds() -> Double {
+        switch runtimeProfile {
+        case .balanced:
+            return 2.0
+        case .lowPowerAlwaysOn:
+            return currentScenePhase == .background ? 4.0 : 3.0
+        case .edgeAlwaysOn:
+            return currentScenePhase == .background ? 7.0 : 4.0
+        }
     }
 
     // MARK: - Call reliability
