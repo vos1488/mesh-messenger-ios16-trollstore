@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 
 #if canImport(UIKit)
 import UIKit
@@ -77,6 +78,24 @@ struct SettingsView: View {
                     Text("Для связи между разными Wi‑Fi/4G укажите bootstrap relay узлы.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("Навигация и anti-spoof") {
+                    Toggle(
+                        "Включить доверенную геопозицию",
+                        isOn: Binding(
+                            get: { store.locationTrackingEnabled },
+                            set: { store.setLocationTrackingEnabled($0) }
+                        )
+                    )
+                    LabeledContent("Авторизация", value: authorizationText(store.trustedLocation.authorization))
+                    LabeledContent("Доверие", value: "\(store.trustedLocation.trustScore)% • \(store.locationTrustSummary)")
+                    if let lat = store.trustedLocation.latitude, let lon = store.trustedLocation.longitude {
+                        LabeledContent("Координаты", value: "\(formatCoordinate(lat)), \(formatCoordinate(lon))")
+                    }
+                    Text(store.trustedLocation.reason)
+                        .font(.caption2)
+                        .foregroundStyle(store.trustedLocation.suspectedSpoofing ? .orange : .secondary)
                 }
 
                 Section("Диагностика") {
@@ -163,5 +182,19 @@ struct SettingsView: View {
                 Text("Будут удалены все сообщения со всеми собеседниками. Это действие нельзя отменить.")
             }
         }
+    }
+
+    private func authorizationText(_ auth: LocationAuthorizationState) -> String {
+        switch auth {
+        case .notDetermined: return "не запрошено"
+        case .restricted: return "ограничено"
+        case .denied: return "запрещено"
+        case .authorizedWhenInUse: return "при использовании"
+        case .authorizedAlways: return "всегда"
+        }
+    }
+
+    private func formatCoordinate(_ value: Double) -> String {
+        String(format: "%.6f", value)
     }
 }

@@ -122,3 +122,16 @@
 - [ ] Автоматизированные soak tests mesh-сети (длительные прогонны)
 - [ ] Локализованный onboarding и встроенная справка
 - [ ] Community governance: RFC-процесс и contribution guide
+
+## Stage 9 — Trusted navigation & anti-spoof (v2.1)
+
+- [x] Добавить `LocationTrustEngine` (CoreLocation + CoreMotion) с trust-score 0..100
+- [x] Внедрить runtime-совместимость iOS 16+ для TrollStore и Developer Certificate сборок
+- [x] Добавить базовый anti-spoof эвристический детект (simulated source / teleport / sensor mismatch)
+- [x] Добавить UI-статус доверия геопозиции в настройках
+- [ ] Добавить сетевые cross-check сигналы (IP region / RTT consistency) в trust-score
+- [ ] Добавить mesh consensus proximity check от соседних peer-ов
+- [ ] Добавить fallback на «последнюю доверенную точку» в навигационном маршруте
+- [ ] Вынести веса trust-факторов в калибруемые profile-политики
+- [ ] Добавить экран диагностики spoof-сигналов и confidence timeline
+- [ ] Прогнать полевые тесты (город/трасса/офлайн) и откалибровать пороги

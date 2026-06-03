@@ -186,6 +186,8 @@ public final class NodeStore: ObservableObject {
     @Published public var chatThreadSettings: [String: ChatThreadSettings] = [:]
     @Published public var peerPresenceLastSeen: [String: Date] = [:]
     @Published public var peerTypingUntil: [String: Date] = [:]
+    @Published public var locationTrackingEnabled: Bool = true
+    @Published public var trustedLocation: TrustedLocationSnapshot = .unavailable
 
     private var transport: HybridTransport?
     private var storageEngine: StorageEngine?
@@ -195,6 +197,7 @@ public final class NodeStore: ObservableObject {
     private let fileTransferEngine = FileTransferEngine()
     private let callEngine = MCStreamCallEngine()
     private let backgroundRuntime = BackgroundRuntimeManager()
+    private var locationTrustEngine: LocationTrustEngine?
     private var deliveryTask: Task<Void, Never>?
     private var outgoingCallInviteTask: Task<Void, Never>?
     private var outgoingCallTimeoutTask: Task<Void, Never>?
@@ -210,6 +213,7 @@ public final class NodeStore: ObservableObject {
     private let maxDeliveryAttempts = 8
     private let maxMessagesPerPeerInMemory = 2000
     private let maxMessagesPerPeerOnStartup = 600
+    private let locationTrackingUserDefaultsKey = "mesh.location.trust.enabled"
 
     public static let shared = NodeStore()
     private init() {}
@@ -240,6 +244,7 @@ public final class NodeStore: ObservableObject {
             myPeerURI = profile.peerID.uri
             nickname = profile.nickname
             wanBootstrapRaw = UserDefaults.standard.string(forKey: "mesh_wan_bootstrap") ?? ""
+            locationTrackingEnabled = UserDefaults.standard.object(forKey: locationTrackingUserDefaultsKey) as? Bool ?? true
 
             loadPersistedData()
 
@@ -300,6 +305,7 @@ public final class NodeStore: ObservableObject {
             t.start()
             startDeliveryLoop()
             requestNotificationPermission()
+            configureLocationTrustEngineIfNeeded()
             isRunning = true
             errorMessage = nil
             appendDebug("node", "node started as \(myPeerIDValue.prefix(8))")
@@ -328,6 +334,8 @@ public final class NodeStore: ObservableObject {
         peerTypingUntil.removeAll()
         typingStateSent.removeAll()
         lastTypingSentAt.removeAll()
+        trustedLocation = .unavailable
+        locationTrustEngine?.stop()
         isRunning = false
         appendDebug("node", "node stopped")
     }
@@ -355,8 +363,10 @@ public final class NodeStore: ObservableObject {
         currentScenePhase = phase
         switch phase {
         case .active:
+            locationTrustEngine?.setForegroundActive(true)
             onAppBecameActive()
         case .background:
+            locationTrustEngine?.setForegroundActive(false)
             if activeCall != nil {
                 backgroundRuntime.activateCallAudio()
             } else {
@@ -368,6 +378,50 @@ public final class NodeStore: ObservableObject {
         @unknown default:
             break
         }
+    }
+
+    public func setLocationTrackingEnabled(_ enabled: Bool) {
+        locationTrackingEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: locationTrackingUserDefaultsKey)
+        if enabled {
+            configureLocationTrustEngineIfNeeded()
+        } else {
+            locationTrustEngine?.stop()
+            trustedLocation = .unavailable
+        }
+    }
+
+    public var locationTrustSummary: String {
+        switch trustedLocation.confidence {
+        case .high:
+            return "Высокое доверие"
+        case .medium:
+            return "Среднее доверие"
+        case .low:
+            return "Низкое доверие"
+        case .unreliable:
+            return "Недостоверно"
+        }
+    }
+
+    private func configureLocationTrustEngineIfNeeded() {
+        guard locationTrackingEnabled else { return }
+        if locationTrustEngine == nil {
+            let engine = LocationTrustEngine()
+            engine.onSnapshotChanged = { [weak self] snapshot in
+                Task { @MainActor [weak self] in
+                    self?.trustedLocation = snapshot
+                }
+            }
+            engine.onDiagnostics = { [weak self] text in
+                Task { @MainActor [weak self] in
+                    self?.appendDebug("geo", text)
+                }
+            }
+            locationTrustEngine = engine
+        }
+        locationTrustEngine?.setForegroundActive(currentScenePhase == .active)
+        locationTrustEngine?.start()
     }
 
     // MARK: - Messaging
