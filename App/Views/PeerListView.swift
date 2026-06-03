@@ -13,7 +13,11 @@ struct PeerListView: View {
                     peerList
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.clear)
             .navigationTitle("MeshWave Nodes")
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     statusBadge
@@ -72,6 +76,9 @@ struct PeerListView: View {
                             isPinned: settings.isPinned,
                             isMuted: settings.isMuted
                         )
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 4)
+                        .liquidGlassCard(cornerRadius: 14, strokeOpacity: 0.14)
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button {
@@ -129,6 +136,9 @@ struct PeerListView: View {
                                 isPinned: settings.isPinned,
                                 isMuted: settings.isMuted
                             )
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 4)
+                            .liquidGlassCard(cornerRadius: 14, strokeOpacity: 0.14)
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button {
@@ -149,8 +159,12 @@ struct PeerListView: View {
             }
             Section("Мой узел") {
                 myIDCard
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 4)
+                    .liquidGlassCard(cornerRadius: 14, strokeOpacity: 0.14)
             }
         }
+        .listStyle(.insetGrouped)
     }
 
     private func sortedPeers(_ peers: [PeerEntry]) -> [PeerEntry] {

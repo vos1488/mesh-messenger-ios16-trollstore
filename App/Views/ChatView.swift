@@ -110,99 +110,111 @@ struct ChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if let active = store.activeCall, active.peerID == peer.peerID.value {
-                callBanner(active)
-            }
-            if !messages.isEmpty {
-                searchBar
-            }
-            ScrollViewReader { proxy in
-                VStack(spacing: 0) {
-                    if let unreadID = firstUnreadMessageID, unreadInFilteredCount > 0 {
-                        HStack {
-                            Spacer()
-                            Button {
-                                withAnimation {
-                                    proxy.scrollTo(unreadID, anchor: .center)
-                                }
-                            } label: {
-                                Label("К первому непрочитанному (\(unreadInFilteredCount))", systemImage: "arrow.down.circle")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.bordered)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.top, 8)
-                    }
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.06),
+                    Color.clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
 
-                    ScrollView {
-                        LazyVStack(spacing: 8) {
-                            if hasOlderMessages {
-                                historyPreloadRow
+            VStack(spacing: 0) {
+                if let active = store.activeCall, active.peerID == peer.peerID.value {
+                    callBanner(active)
+                }
+                if !messages.isEmpty {
+                    searchBar
+                }
+                ScrollViewReader { proxy in
+                    VStack(spacing: 0) {
+                        if let unreadID = firstUnreadMessageID, unreadInFilteredCount > 0 {
+                            HStack {
+                                Spacer()
+                                Button {
+                                    withAnimation {
+                                        proxy.scrollTo(unreadID, anchor: .center)
+                                    }
+                                } label: {
+                                    Label("К первому непрочитанному (\(unreadInFilteredCount))", systemImage: "arrow.down.circle")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                Spacer()
                             }
-                            if displayedMessages.isEmpty {
-                                if messages.isEmpty {
-                                    emptyConversation
-                                } else {
-                                    emptySearchState
+                            .padding(.horizontal, 12)
+                            .padding(.top, 8)
+                        }
+
+                        ScrollView {
+                            LazyVStack(spacing: 8) {
+                                if hasOlderMessages {
+                                    historyPreloadRow
+                                }
+                                if displayedMessages.isEmpty {
+                                    if messages.isEmpty {
+                                        emptyConversation
+                                    } else {
+                                        emptySearchState
+                                    }
+                                }
+                                ForEach(displayedMessages) { msg in
+                                    MessageBubble(message: msg, fileProgress: msg.fileID.flatMap { store.fileProgress[$0] })
+                                        .id(msg.id)
+                                        .contextMenu {
+                                            Button {
+                                                replyingToMessage = msg
+                                            } label: {
+                                                Label("Ответить", systemImage: "arrowshape.turn.up.left")
+                                            }
+                                            Button {
+                                                forwardingMessage = msg
+                                            } label: {
+                                                Label("Переслать", systemImage: "arrowshape.turn.up.right")
+                                            }
+                                            Button(role: .destructive) {
+                                                store.deleteLocalMessage(peerID: peer.peerID.value, messageID: msg.id)
+                                            } label: {
+                                                Label("Удалить у себя", systemImage: "trash")
+                                            }
+                                        }
                                 }
                             }
-                            ForEach(displayedMessages) { msg in
-                                MessageBubble(message: msg, fileProgress: msg.fileID.flatMap { store.fileProgress[$0] })
-                                    .id(msg.id)
-                                    .contextMenu {
-                                        Button {
-                                            replyingToMessage = msg
-                                        } label: {
-                                            Label("Ответить", systemImage: "arrowshape.turn.up.left")
-                                        }
-                                        Button {
-                                            forwardingMessage = msg
-                                        } label: {
-                                            Label("Переслать", systemImage: "arrowshape.turn.up.right")
-                                        }
-                                        Button(role: .destructive) {
-                                            store.deleteLocalMessage(peerID: peer.peerID.value, messageID: msg.id)
-                                        } label: {
-                                            Label("Удалить у себя", systemImage: "trash")
-                                        }
-                                    }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 16)
+                        }
+                        .onChange(of: messages.count) { _ in
+                            if let last = displayedMessages.last {
+                                withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                             }
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 16)
-                    }
-                    .onChange(of: messages.count) { _ in
-                        if let last = displayedMessages.last {
-                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        .onAppear {
+                            visibleLimit = pageSize
+                            if let last = displayedMessages.last {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                            store.markConversationRead(peerID: peer.peerID.value)
                         }
-                    }
-                    .onAppear {
-                        visibleLimit = pageSize
-                        if let last = displayedMessages.last {
-                            proxy.scrollTo(last.id, anchor: .bottom)
+                        .onChange(of: searchText) { _ in
+                            visibleLimit = pageSize
                         }
-                        store.markConversationRead(peerID: peer.peerID.value)
-                    }
-                    .onChange(of: searchText) { _ in
-                        visibleLimit = pageSize
-                    }
-                    .onChange(of: searchType) { _ in
-                        visibleLimit = pageSize
-                    }
-                    .onChange(of: searchDate) { _ in
-                        visibleLimit = pageSize
+                        .onChange(of: searchType) { _ in
+                            visibleLimit = pageSize
+                        }
+                        .onChange(of: searchDate) { _ in
+                            visibleLimit = pageSize
+                        }
                     }
                 }
-            }
 
-            Divider()
-            if let reply = replyingToMessage {
-                replyPreview(reply)
+                Divider().background(Color.white.opacity(0.2))
+                if let reply = replyingToMessage {
+                    replyPreview(reply)
+                }
+                inputBar
             }
-            inputBar
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
@@ -340,7 +352,7 @@ struct ChatView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color(.secondarySystemBackground)))
+            .liquidGlassCard(cornerRadius: 12, strokeOpacity: 0.16)
 
             HStack(spacing: 8) {
                 Menu {
@@ -435,7 +447,9 @@ struct ChatView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(.secondarySystemBackground))
+        .liquidGlassCard(cornerRadius: 14, strokeOpacity: 0.16)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
     }
 
     private var emptyConversation: some View {
@@ -480,7 +494,10 @@ struct ChatView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(.systemBackground))
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Divider().background(Color.white.opacity(0.15))
+        }
     }
 
     @ViewBuilder
@@ -505,7 +522,8 @@ struct ChatView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(.secondarySystemBackground))
+        .liquidGlassCard(cornerRadius: 12, strokeOpacity: 0.16)
+        .padding(.horizontal, 12)
     }
 
     private func sendMessage() {
@@ -615,7 +633,11 @@ struct MessageBubble: View {
                     .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 16)
-                            .fill(message.isMe ? Color.accentColor : Color(.secondarySystemBackground))
+                            .fill(message.isMe ? Color.accentColor.opacity(0.90) : Color.white.opacity(0.12))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.white.opacity(message.isMe ? 0.10 : 0.18), lineWidth: 1)
                     )
                     .foregroundStyle(message.isMe ? .white : .primary)
                     .textSelection(.enabled)

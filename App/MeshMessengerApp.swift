@@ -58,6 +58,8 @@ struct RootView: View {
                                 Label("Карта", systemImage: "map.fill")
                             }
                     }
+                    .toolbarBackground(.visible, for: .tabBar)
+                    .toolbarBackground(.ultraThinMaterial, for: .tabBar)
                 } else {
                     LaunchView()
                 }

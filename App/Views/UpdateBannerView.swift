@@ -63,12 +63,15 @@ struct UpdateBannerView: View {
                 }
             }
             .background(
-                LinearGradient(colors: [Color(red: 0.10, green: 0.45, blue: 0.95),
-                                        Color(red: 0.05, green: 0.30, blue: 0.80)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 14))
-            .shadow(color: .blue.opacity(0.35), radius: 10, x: 0, y: 5)
+            .shadow(color: .black.opacity(0.22), radius: 10, x: 0, y: 5)
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .overlay(alignment: .bottomLeading) {

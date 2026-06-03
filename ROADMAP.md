@@ -144,6 +144,7 @@
 
 - [x] Ребрендинг приложения: MeshWave (название + отображение продукта)
 - [x] Liquid Glass web UX в стиле desktop messenger (Telegram-like layout)
+- [x] Liquid Glass iOS UI для ключевых экранов (чаты, список узлов, настройки)
 - [x] Live web event stream + secure diagnostics timeline
 - [x] Криптографическое подтверждение web-сессии (`auth_challenge` + Ed25519 signature)
 - [x] Показ fingerprint и peer identity в web-клиенте
